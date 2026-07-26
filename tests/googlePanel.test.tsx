@@ -3,6 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalendarEvent } from '../src/domain/types';
 import { GooglePanel } from '../src/components/GooglePanel';
+import type { GoogleCalendarListItem } from '../src/services/googleCalendar';
+import {
+  DEFAULT_GOOGLE_EVENT_COLOR,
+  GOOGLE_COLOR_FALLBACK_WARNING,
+} from '../src/services/calendarExportPreferences';
 
 const omszEvent: CalendarEvent = {
   id: 'event-omsz',
@@ -59,7 +64,11 @@ function installGoogleIdentity(): void {
   };
 }
 
-function calendars(items = [{ id: 'primary', summary: 'Teszt naptár', accessRole: 'owner' }]) {
+function calendars(
+  items: GoogleCalendarListItem[] = [
+    { id: 'primary', summary: 'Teszt naptár', accessRole: 'owner' },
+  ],
+) {
   return jsonResponse({ items });
 }
 
@@ -69,6 +78,7 @@ function renderGooglePanel(events: CalendarEvent[] = [omszEvent, kmrEvent], rese
     onResult: vi.fn(),
     onCalendarChange: vi.fn(),
     onNewSchedule: vi.fn(),
+    onConnectionChange: vi.fn(),
   };
   const view = render(<GooglePanel events={events} resetKey={resetKey} {...callbacks} />);
   return { ...view, callbacks };
@@ -106,17 +116,26 @@ describe('Google feltöltési panel', () => {
 
   it('a kijelölt eseményszámot mutatja, feltöltéskor tiltott, és dupla kattintásra is csak egyszer indul', async () => {
     const user = userEvent.setup();
-    let resolveDuplicateCheck: (response: Response) => void = () => undefined;
-    const duplicateCheck = new Promise<Response>((resolve) => {
+    let resolveDuplicateCheck: () => void = () => undefined;
+    const duplicateCheck = new Promise<void>((resolve) => {
       resolveDuplicateCheck = resolve;
     });
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input, init) => {
       const url = requestUrl(input);
       if (url.endsWith('/users/me/calendarList')) return Promise.resolve(calendars());
+      if (url.endsWith('/colors')) {
+        return Promise.resolve(
+          jsonResponse({
+            event: {
+              '10': { background: '#51b749', foreground: '#ffffff' },
+            },
+          }),
+        );
+      }
       if (init?.method === 'POST') {
         return Promise.resolve(jsonResponse({ id: 'created', colorId: '10' }));
       }
-      return duplicateCheck;
+      return duplicateCheck.then(() => jsonResponse({ items: [] }));
     });
     vi.stubGlobal('fetch', fetcher);
     renderGooglePanel([omszEvent]);
@@ -136,8 +155,41 @@ describe('Google feltöltési panel', () => {
       fetcher.mock.calls.filter(([input]) => requestUrl(input).includes('/events?')),
     ).toHaveLength(1);
 
-    resolveDuplicateCheck(jsonResponse({ items: [] }));
+    resolveDuplicateCheck();
     expect(await screen.findByRole('heading', { name: 'Sikeres naptárfeltöltés' })).toBeVisible();
+  });
+
+  it('a beállításkártyát bejelentkezés után közvetlenül a feltöltési művelet elé helyezi', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation((input) => {
+        if (requestUrl(input).endsWith('/users/me/calendarList')) {
+          return Promise.resolve(calendars());
+        }
+        return Promise.resolve(jsonResponse({ event: {} }));
+      }),
+    );
+    render(
+      <GooglePanel
+        events={[omszEvent]}
+        resetKey={0}
+        onEventStart={vi.fn()}
+        onResult={vi.fn()}
+        onCalendarChange={vi.fn()}
+        onNewSchedule={vi.fn()}
+        eventSettings={<section data-testid="event-settings">Beállítások</section>}
+      />,
+    );
+
+    expect(screen.queryByTestId('event-settings')).not.toBeInTheDocument();
+    await signIn(user);
+
+    const settings = screen.getByTestId('event-settings');
+    const uploadButton = screen.getByRole('button', {
+      name: '1 kijelölt esemény hozzáadása a Google Naptárhoz',
+    });
+    expect(settings.nextElementSibling).toBe(uploadButton);
   });
 
   it('teljes siker után eltünteti a feltöltési gombot, összesít és helyes címen nyitja a naptárt', async () => {
@@ -174,6 +226,154 @@ describe('Google feltöltési panel', () => {
 
     await user.click(calendarLink);
     expect(clickListener).toHaveBeenCalledOnce();
+  });
+
+  it('Google színpaletta-hibánál Basil 10-re esik vissza, de a naptárválasztást nem blokkolja', async () => {
+    const user = userEvent.setup();
+    const onEventColorsChange = vi.fn();
+    let paletteRequests = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/users/me/calendarList')) return Promise.resolve(calendars());
+      if (url.endsWith('/colors')) {
+        paletteRequests += 1;
+        return Promise.resolve(
+          paletteRequests === 1
+            ? jsonResponse({ error: 'palette unavailable' }, 500)
+            : jsonResponse({
+                event: {
+                  '9': { background: '#5484ed', foreground: '#ffffff' },
+                  '10': { background: '#51b749', foreground: '#ffffff' },
+                },
+              }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ items: [] }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const callbacks = {
+      onEventStart: vi.fn(),
+      onResult: vi.fn(),
+      onCalendarChange: vi.fn(),
+      onNewSchedule: vi.fn(),
+    };
+    const view = render(
+      <GooglePanel
+        events={[omszEvent]}
+        resetKey={0}
+        onEventColorsChange={onEventColorsChange}
+        {...callbacks}
+      />,
+    );
+
+    await signIn(user);
+
+    await waitFor(() =>
+      expect(onEventColorsChange).toHaveBeenCalledWith(
+        [DEFAULT_GOOGLE_EVENT_COLOR],
+        GOOGLE_COLOR_FALLBACK_WARNING,
+      ),
+    );
+    expect(screen.getByLabelText('Írható naptár')).toBeVisible();
+    expect(
+      screen.getByRole('button', {
+        name: '1 kijelölt esemény hozzáadása a Google Naptárhoz',
+      }),
+    ).toBeEnabled();
+
+    view.rerender(
+      <GooglePanel
+        events={[omszEvent]}
+        resetKey={0}
+        colorReloadRequest={1}
+        onEventColorsChange={onEventColorsChange}
+        {...callbacks}
+      />,
+    );
+    await waitFor(() =>
+      expect(onEventColorsChange).toHaveBeenLastCalledWith(
+        [expect.objectContaining({ colorId: '9' }), expect.objectContaining({ colorId: '10' })],
+        undefined,
+      ),
+    );
+  });
+
+  it('sikeres bejelentkezésnél átadja az elsődleges naptár fiókazonosítóját, kijelentkezésnél bontja a kapcsolatot', async () => {
+    const user = userEvent.setup();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/users/me/calendarList')) {
+        return Promise.resolve(
+          calendars([
+            {
+              id: 'account-primary@example.com',
+              summary: 'Elsődleges',
+              accessRole: 'owner',
+              primary: true,
+            },
+          ]),
+        );
+      }
+      if (url.endsWith('/colors')) {
+        return Promise.resolve(
+          jsonResponse({
+            event: {
+              '10': { background: '#51b749', foreground: '#ffffff' },
+            },
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ items: [] }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { callbacks } = renderGooglePanel([omszEvent]);
+
+    await signIn(user);
+
+    expect(callbacks.onConnectionChange).toHaveBeenCalledWith({
+      connected: true,
+      primaryCalendarId: 'account-primary@example.com',
+    });
+    await user.click(screen.getByRole('button', { name: 'Kijelentkezés' }));
+    expect(callbacks.onConnectionChange).toHaveBeenLastCalledWith({ connected: false });
+  });
+
+  it('hibás egyéni címnél az ICS-szel együtt a Google-feltöltést is letiltja', async () => {
+    const user = userEvent.setup();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      if (requestUrl(input).endsWith('/users/me/calendarList')) {
+        return Promise.resolve(calendars());
+      }
+      return Promise.resolve(jsonResponse({ items: [] }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const callbacks = {
+      onEventStart: vi.fn(),
+      onResult: vi.fn(),
+      onCalendarChange: vi.fn(),
+      onNewSchedule: vi.fn(),
+    };
+    render(
+      <GooglePanel
+        events={[omszEvent]}
+        resetKey={0}
+        preferences={{
+          titleMode: 'custom',
+          customTitle: '',
+          googleColorId: '10',
+        }}
+        preferencesError="Az egyéni eseménynév nem lehet üres."
+        {...callbacks}
+      />,
+    );
+
+    await signIn(user);
+
+    expect(
+      screen.getByRole('button', {
+        name: '1 kijelölt esemény hozzáadása a Google Naptárhoz',
+      }),
+    ).toBeDisabled();
   });
 
   it('részleges siker után kizárólag a sikertelen eseményt próbálja újra', async () => {

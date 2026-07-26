@@ -2,11 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
-import {
-  asFile,
-  dailyInferenceWorkbookBuffer,
-  workbookBuffer,
-} from './fixtures/syntheticWorkbook';
+import { asFile, dailyInferenceWorkbookBuffer, workbookBuffer } from './fixtures/syntheticWorkbook';
 
 describe('felhasználói felület', () => {
   beforeEach(() => {
@@ -69,7 +65,9 @@ describe('felhasználói felület', () => {
     expect(within(reviewTable).getAllByText('Nappalos 06–18').length).toBeGreaterThan(0);
     expect(within(reviewTable).getAllByText('Nappalos 10–22').length).toBeGreaterThan(0);
     expect(within(reviewTable).getAllByText('10-es kocsi').length).toBeGreaterThan(0);
-    const twentyFourHourRow = within(reviewTable).getAllByText('24 órás szolgálat')[0]?.closest('tr');
+    const twentyFourHourRow = within(reviewTable)
+      .getAllByText('24 órás szolgálat')[0]
+      ?.closest('tr');
     if (!twentyFourHourRow) throw new Error('Hiányzó 24 órás szolgálati sor.');
     expect(within(twentyFourHourRow).getAllByText('07:00')).toHaveLength(2);
     expect(
@@ -104,6 +102,22 @@ describe('felhasználói felület', () => {
     );
     expect(screen.getByRole('button', { name: /Ellenőrzés.*Aktuális/u })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Export.*Nem elérhető/u })).toBeDisabled();
+  });
+
+  it('kijelentkezve elrejti a Google-eseménybeállításokat, de az automatikus ICS-export működik', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.upload(screen.getByTestId('file-input'), asFile(await workbookBuffer()));
+    await user.selectOptions(await screen.findByLabelText('Dolgozó'), 'teszt elek');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    expect(
+      screen.queryByRole('heading', { name: 'Naptáresemény beállításai' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Esemény neve')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ICS letöltése' })).toBeEnabled();
+    expect(screen.getByLabelText<HTMLSelectElement>('Dolgozó')).toHaveValue('teszt elek');
+    expect(screen.getByRole('heading', { name: 'Ellenőrzés' })).toBeVisible();
   });
 
   it('a kijelölt dolgozó szolgálatát a munkalap más dolgozóinak napi jelölései alapján korrigálja', async () => {

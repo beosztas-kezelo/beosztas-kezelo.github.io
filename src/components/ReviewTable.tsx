@@ -1,7 +1,7 @@
 import type { Ref } from 'react';
 import type { GoogleEventState, ReviewRow } from '../domain/types';
 import { STAFF_ROLE_LABELS, STAFF_ROLES } from '../domain/staffRoles';
-import { crewOverlapLabel } from '../services/crewMatching';
+import { crewOverlapLabel } from '../services/crewTimeDisplay';
 import { formatHungarianDate, weekdayHungarian } from '../services/dates';
 import { isGoogleSelectionLocked } from '../utils/googleUpload';
 

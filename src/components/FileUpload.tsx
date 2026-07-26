@@ -1,4 +1,6 @@
 import {
+  forwardRef,
+  useImperativeHandle,
   useRef,
   useState,
   type ChangeEvent,
@@ -24,15 +26,31 @@ interface FileUploadProps {
   onRemove: (role: StaffRole) => void;
 }
 
-export function FileUpload({
-  files,
-  disabled,
-  sectionRef,
-  onFile,
-  onRemove,
-}: FileUploadProps) {
+export interface FileUploadHandle {
+  openRolePicker: (role: StaffRole) => void;
+}
+
+export const FileUpload = forwardRef<FileUploadHandle, FileUploadProps>(function FileUpload(
+  { files, disabled, sectionRef, onFile, onRemove },
+  ref,
+) {
   const inputRefs = useRef<Partial<Record<StaffRole, HTMLInputElement | null>>>({});
+  const cardRefs = useRef<Partial<Record<StaffRole, HTMLElement | null>>>({});
+  const actionButtonRefs = useRef<Partial<Record<StaffRole, HTMLButtonElement | null>>>({});
   const [draggingRole, setDraggingRole] = useState<StaffRole>();
+
+  useImperativeHandle(ref, () => ({
+    openRolePicker(role) {
+      cardRefs.current[role]?.scrollIntoView({
+        behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+          ? 'auto'
+          : 'smooth',
+        block: 'center',
+      });
+      actionButtonRefs.current[role]?.focus({ preventScroll: true });
+      inputRefs.current[role]?.click();
+    },
+  }));
 
   const choose = (role: StaffRole, event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -54,14 +72,17 @@ export function FileUpload({
         <h2 id="upload-heading">Excel-beosztások kiválasztása</h2>
       </div>
       <p className="muted">
-        Legalább egy munkaköri beosztás szükséges. A fájl szerepét az határozza meg, melyik
-        mezőben választod ki.
+        Legalább egy munkaköri beosztás szükséges. A fájl szerepét az határozza meg, melyik mezőben
+        választod ki.
       </p>
       <div className="role-file-grid">
         {STAFF_ROLES.map((role) => {
           const item = files[role];
           return (
             <article
+              ref={(element) => {
+                cardRefs.current[role] = element;
+              }}
               className={`role-file-card role-file-${item.status}${
                 draggingRole === role ? ' is-dragging' : ''
               }`}
@@ -91,9 +112,7 @@ export function FileUpload({
               />
               <p className="role-file-drop-hint">Húzd ide, vagy válaszd ki az Excel-fájlt.</p>
               {item.status === 'empty' && <p className="muted">Nincs fájl kiválasztva.</p>}
-              {item.status === 'loading' && (
-                <p role="status">A munkafüzet feldolgozása…</p>
-              )}
+              {item.status === 'loading' && <p role="status">A munkafüzet feldolgozása…</p>}
               {item.status === 'success' && (
                 <div className="role-file-status" aria-live="polite">
                   <p>
@@ -114,6 +133,9 @@ export function FileUpload({
               )}
               <div className="role-file-actions">
                 <button
+                  ref={(element) => {
+                    actionButtonRefs.current[role] = element;
+                  }}
                   type="button"
                   className="button secondary"
                   onClick={() => inputRefs.current[role]?.click()}
@@ -137,10 +159,9 @@ export function FileUpload({
         })}
       </div>
       <p className="privacy-note">
-        <span aria-hidden="true">◆</span>A fájl feldolgozása helyben, a böngészőben történik.
-        Ez minden kiválasztott beosztásra érvényes; a fájlok nem kerülnek feltöltésre vagy
-        eltárolásra.
+        <span aria-hidden="true">◆</span>A fájl feldolgozása helyben, a böngészőben történik. Ez
+        minden kiválasztott beosztásra érvényes; a fájlok nem kerülnek feltöltésre vagy eltárolásra.
       </p>
     </section>
   );
-}
+});

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CalendarEvent } from '../domain/types';
+import type { ReactNode } from 'react';
+import type {
+  CalendarEvent,
+  CalendarExportPreferences,
+  GoogleEventColorOption,
+} from '../domain/types';
 import { AppError } from '../domain/errors';
 import {
   GoogleCalendarClient,
@@ -7,6 +12,11 @@ import {
   type GoogleCalendarListItem,
   type GoogleWriteResult,
 } from '../services/googleCalendar';
+import {
+  DEFAULT_CALENDAR_EXPORT_PREFERENCES,
+  DEFAULT_GOOGLE_EVENT_COLOR,
+  GOOGLE_COLOR_FALLBACK_WARNING,
+} from '../services/calendarExportPreferences';
 import { requestGoogleAccessToken, revokeGoogleToken } from '../services/googleOAuth';
 import { ErrorNotice } from './ErrorNotice';
 
@@ -29,6 +39,13 @@ interface GooglePanelProps {
   onResult: (result: GoogleWriteResult) => void;
   onCalendarChange: () => void;
   onNewSchedule: () => void;
+  preferences?: CalendarExportPreferences;
+  preferencesError?: string;
+  onEventColorsChange?: (colors: GoogleEventColorOption[], warning?: string) => void;
+  onEventColorsReset?: () => void;
+  onConnectionChange?: (connection: { connected: boolean; primaryCalendarId?: string }) => void;
+  colorReloadRequest?: number;
+  eventSettings?: ReactNode;
 }
 
 function asGoogleError(error: unknown): AppError {
@@ -62,11 +79,20 @@ export function GooglePanel({
   onResult,
   onCalendarChange,
   onNewSchedule,
+  preferences = DEFAULT_CALENDAR_EXPORT_PREFERENCES,
+  preferencesError,
+  onEventColorsChange,
+  onEventColorsReset,
+  onConnectionChange,
+  colorReloadRequest = 0,
+  eventSettings,
 }: GooglePanelProps) {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
   const tokenSession = useRef(new GoogleTokenSession());
   const uploadLock = useRef(false);
   const runId = useRef(0);
+  const paletteLoadId = useRef(0);
+  const handledColorReloadRequest = useRef(0);
   const abortController = useRef<AbortController | undefined>(undefined);
   const [calendars, setCalendars] = useState<GoogleCalendarListItem[]>([]);
   const [calendarId, setCalendarId] = useState('');
@@ -115,6 +141,39 @@ export function GooglePanel({
     if (events.some((event) => !completedScopeIds.has(event.id))) resetUploadResult();
   }, [events, phase, resetUploadResult, scope]);
 
+  const loadEventColors = useCallback(
+    async (client: GoogleCalendarClient) => {
+      const currentPaletteLoadId = paletteLoadId.current + 1;
+      paletteLoadId.current = currentPaletteLoadId;
+      try {
+        const colors = await client.listEventColors();
+        if (paletteLoadId.current !== currentPaletteLoadId) return;
+        onEventColorsChange?.(
+          colors.length > 0 ? colors : [DEFAULT_GOOGLE_EVENT_COLOR],
+          colors.length > 0 ? undefined : GOOGLE_COLOR_FALLBACK_WARNING,
+        );
+      } catch {
+        if (paletteLoadId.current === currentPaletteLoadId) {
+          onEventColorsChange?.([DEFAULT_GOOGLE_EVENT_COLOR], GOOGLE_COLOR_FALLBACK_WARNING);
+        }
+      }
+    },
+    [onEventColorsChange],
+  );
+
+  useEffect(() => {
+    if (
+      colorReloadRequest === 0 ||
+      colorReloadRequest === handledColorReloadRequest.current ||
+      !signedIn
+    ) {
+      return;
+    }
+    handledColorReloadRequest.current = colorReloadRequest;
+    const token = tokenSession.current.get();
+    if (token) void loadEventColors(new GoogleCalendarClient(token));
+  }, [colorReloadRequest, loadEventColors, signedIn]);
+
   const counts = useMemo(() => uploadCounts(scope, outcomes), [outcomes, scope]);
   const failedResults = useMemo(
     () => [...outcomes.values()].filter((result) => result.status === 'Sikertelen'),
@@ -149,7 +208,8 @@ export function GooglePanel({
     try {
       const token = await requestGoogleAccessToken(clientId);
       tokenSession.current.set(token);
-      const available = await new GoogleCalendarClient(token).listWritableCalendars();
+      const client = new GoogleCalendarClient(token);
+      const available = await client.listWritableCalendars();
       const nextCalendarId =
         available.find((item) => item.id === calendarId)?.id ??
         available.find((item) => item.primary)?.id ??
@@ -163,9 +223,15 @@ export function GooglePanel({
       setCalendarId(nextCalendarId);
       setSignedIn(true);
       setSignedOutNotice(false);
+      onConnectionChange?.({
+        connected: true,
+        primaryCalendarId: available.find((item) => item.primary)?.id,
+      });
+      void loadEventColors(client);
     } catch (caught) {
       tokenSession.current.clear();
       setSignedIn(false);
+      onConnectionChange?.({ connected: false });
       setError(asGoogleError(caught));
     } finally {
       setAuthBusy(false);
@@ -175,6 +241,7 @@ export function GooglePanel({
   const signOut = () => {
     if (phase === 'uploading') return;
     tokenSession.current.signOut(revokeGoogleToken);
+    paletteLoadId.current += 1;
     setSignedIn(false);
     setCalendars([]);
     setCalendarId('');
@@ -182,6 +249,8 @@ export function GooglePanel({
     setAuthRequired(false);
     setSignedOutNotice(true);
     setError(undefined);
+    onEventColorsReset?.();
+    onConnectionChange?.({ connected: false });
   };
 
   const selectCalendar = (nextCalendarId: string) => {
@@ -205,13 +274,15 @@ export function GooglePanel({
       targets.length === 0 ||
       !signedIn ||
       !calendarId ||
-      phase === 'uploading'
+      phase === 'uploading' ||
+      Boolean(preferencesError)
     ) {
       return;
     }
     const token = tokenSession.current.get();
     if (!token) {
       setSignedIn(false);
+      onConnectionChange?.({ connected: false });
       setError(new AppError('GOOGLE_TOKEN_EXPIRED'));
       return;
     }
@@ -241,6 +312,7 @@ export function GooglePanel({
     try {
       const results = await new GoogleCalendarClient(token).addEvents(calendarId, targets, {
         signal: controller.signal,
+        preferences,
         onStart: (event) => {
           if (runId.current === currentRunId) onEventStart(event.id);
         },
@@ -261,6 +333,7 @@ export function GooglePanel({
       if (tokenExpired) {
         tokenSession.current.clear();
         setSignedIn(false);
+        onConnectionChange?.({ connected: false });
         setError(new AppError('GOOGLE_TOKEN_EXPIRED'));
       }
 
@@ -287,7 +360,8 @@ export function GooglePanel({
   ];
   const failureMessage =
     failedResults[0]?.message ?? error?.message ?? 'A naptárfeltöltés nem sikerült.';
-  const retryDisabled = !signedIn || !calendarId || retryEvents.length === 0;
+  const retryDisabled =
+    !signedIn || !calendarId || retryEvents.length === 0 || Boolean(preferencesError);
 
   return (
     <section className="panel google-panel" aria-labelledby="google-heading">
@@ -348,12 +422,16 @@ export function GooglePanel({
         </div>
       )}
 
+      {signedIn && eventSettings}
+
       {phase === 'idle' && signedIn && (
         <button
           type="button"
           className="button primary google-upload-button"
           onClick={() => void upload(events, true)}
-          disabled={events.length === 0 || !calendarId || uploadLock.current}
+          disabled={
+            events.length === 0 || !calendarId || uploadLock.current || Boolean(preferencesError)
+          }
         >
           {events.length} kijelölt esemény hozzáadása a Google Naptárhoz
         </button>

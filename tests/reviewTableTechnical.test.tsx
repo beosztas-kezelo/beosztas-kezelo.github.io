@@ -2,7 +2,24 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ReviewTable } from '../src/components/ReviewTable';
-import type { GoogleEventState, ReviewRow } from '../src/domain/types';
+import type { CrewMemberMatch, GoogleEventState, ReviewRow } from '../src/domain/types';
+
+function crewMatch(
+  displayName: string,
+  employeeRow: number,
+  start: string,
+  end: string,
+): CrewMemberMatch {
+  return {
+    role: 'nurse',
+    employeeName: displayName,
+    normalizedName: displayName.toLocaleLowerCase('hu-HU'),
+    employeeRow,
+    displayName,
+    serviceCategory: 'Esetszolgálat',
+    overlap: { start, end },
+  };
+}
 
 describe('érintett számos jelölések technikai részletei', () => {
   it('megjeleníti a stílust, a korrekciót, a párosítást, az időket és a Google-átfedést', async () => {
@@ -98,10 +115,57 @@ describe('érintett számos jelölések technikai részletei', () => {
     expect(within(tableRow).getByText('C5 (merge master: C5)')).toBeVisible();
     expect(within(tableRow).getByText('argb=FF008000')).toBeVisible();
     expect(within(tableRow).getByText('#008000')).toBeVisible();
-    expect(
-      within(tableRow).getByText(
-        '2026-08-31T07:00:00 – 2026-09-01T06:59:00',
-      ),
-    ).toBeVisible();
+    expect(within(tableRow).getByText('2026-08-31T07:00:00 – 2026-09-01T06:59:00')).toBeVisible();
+  });
+
+  it('a webes társlistában 07:00-ként jeleníti meg a tényleges 06:59-es befejezést', async () => {
+    const user = userEvent.setup();
+    const event = {
+      id: 'event-with-crew',
+      summary: 'OMSZ' as const,
+      shiftType: '24 órás szolgálat' as const,
+      serviceCategory: 'Esetszolgálat' as const,
+      shiftTime: {
+        start: '2026-08-10T07:00:00',
+        end: '2026-08-11T07:00:00',
+      },
+      calendarTime: {
+        start: '2026-08-10T07:00:00',
+        end: '2026-08-11T06:59:00',
+      },
+      timeZone: 'Europe/Budapest' as const,
+    };
+    const row: ReviewRow = {
+      id: 'crew-row',
+      date: { year: 2026, month: 8, day: 10 },
+      marker: '17–7',
+      shiftType: event.shiftType,
+      serviceCategory: event.serviceCategory,
+      summary: event.summary,
+      status: 'Exportálható',
+      note: 'Teszt.',
+      diagnostics: [],
+      event,
+      crewMatches: [
+        crewMatch('Nappalos Ápoló', 7, '2026-08-10T07:00:00', '2026-08-10T19:00:00'),
+        crewMatch('Éjszakás Ápoló', 9, '2026-08-10T19:00:00', '2026-08-11T06:59:00'),
+      ],
+    };
+
+    render(
+      <ReviewTable
+        rows={[row]}
+        selected={new Set([event.id])}
+        googleStates={new Map()}
+        crewSearchEnabled
+        onToggle={vi.fn()}
+        onSelectAll={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText('2 társ'));
+    expect(screen.getByText('Nappalos Ápoló – 07:00–19:00')).toBeVisible();
+    expect(screen.getByText('Éjszakás Ápoló – 19:00–07:00')).toBeVisible();
+    expect(screen.queryByText(/19:00–06:59/u)).not.toBeInTheDocument();
   });
 });

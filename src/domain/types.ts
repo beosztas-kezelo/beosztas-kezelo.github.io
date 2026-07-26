@@ -129,12 +129,7 @@ export type ShiftType =
   | 'KMR';
 
 export type ServiceCategory =
-  | 'Parti szolgálat'
-  | 'Esetszolgálat'
-  | '6-os kocsi'
-  | '10-es kocsi'
-  | 'Nappalos 06–18'
-  | 'KMR';
+  'Parti szolgálat' | 'Esetszolgálat' | '6-os kocsi' | '10-es kocsi' | 'Nappalos 06–18' | 'KMR';
 
 export type InferredTwelveKind = 'blue' | 'tenCar';
 
@@ -200,6 +195,21 @@ export interface CalendarEvent {
   crewMembers?: CrewMemberMatch[];
 }
 
+export type CalendarEventTitleMode = 'automatic' | 'custom';
+
+export interface CalendarExportPreferences {
+  titleMode: CalendarEventTitleMode;
+  customTitle: string;
+  googleColorId: string;
+}
+
+export interface GoogleEventColorOption {
+  colorId: string;
+  background: string;
+  foreground: string;
+  label: string;
+}
+
 export interface InterpretedEmployeeSchedule {
   role: StaffRole;
   employeeName: string;
@@ -219,11 +229,7 @@ export interface CrewMemberMatch {
   overlap: EventTimeRange;
 }
 
-export type CrewNoticeKind =
-  | 'missing-file'
-  | 'missing-month'
-  | 'no-match'
-  | 'multiple-matches';
+export type CrewNoticeKind = 'missing-file' | 'missing-month' | 'no-match' | 'multiple-matches';
 
 export interface CrewMatchNotice {
   role: StaffRole;

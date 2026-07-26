@@ -97,8 +97,7 @@ describe('teljes munkalapos következtetés Excel-integrációja', () => {
       const ics = buildIcs([event]);
       expect(ics).toContain(`DTSTART;TZID=Europe/Budapest:${icsStart}`);
       expect(ics).toContain(`DTEND;TZID=Europe/Budapest:${icsEnd}`);
-      expect(ics).toContain(`DESCRIPTION:Szolgálati jelleg: ${category}`);
-      expect(ics).toContain('napi szolgálati összeállításból lett következtetve');
+      expect(ics).not.toContain('DESCRIPTION:');
 
       let requestBody: unknown;
       const fetcher: typeof fetch = (_input, init) => {
@@ -113,10 +112,7 @@ describe('teljes munkalapos következtetés Excel-integrációja', () => {
         end: { dateTime: end, timeZone: 'Europe/Budapest' },
         colorId: '10',
       });
-      expect(requestDescription(requestBody)).toContain(`Szolgálati jelleg: ${category}`);
-      expect(requestDescription(requestBody)).toContain(
-        'napi szolgálati összeállításból lett következtetve',
-      );
+      expect(requestDescription(requestBody)).toBe('');
     },
   );
 });

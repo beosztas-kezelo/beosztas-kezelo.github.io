@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CalendarEvent } from '../src/domain/types';
+import type { CalendarEvent, CalendarExportPreferences } from '../src/domain/types';
 import type { AppError } from '../src/domain/errors';
 import { GoogleCalendarClient, GoogleTokenSession } from '../src/services/googleCalendar';
 import { requestGoogleAccessToken } from '../src/services/googleOAuth';
@@ -49,6 +49,13 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+function requestUrl(input: RequestInfo | URL | undefined): string {
+  if (!input) return '';
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
 describe('Google Naptár szolgáltatás', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -81,17 +88,20 @@ describe('Google Naptár szolgáltatás', () => {
   });
 
   it('csak pontos summary/start/end egyezést tekint duplikációnak', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      response({
-        items: [
-          {
-            summary: 'OMSZ',
-            start: { dateTime: '2026-08-10T04:00:00Z' },
-            end: { dateTime: '2026-08-10T16:00:00Z' },
-          },
-        ],
-      }),
-    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              summary: 'OMSZ',
+              start: { dateTime: '2026-08-10T04:00:00Z' },
+              end: { dateTime: '2026-08-10T16:00:00Z' },
+            },
+          ],
+        }),
+      );
     await expect(
       new GoogleCalendarClient('token', fetcher).isDuplicate('primary', item),
     ).resolves.toBe(true);
@@ -100,6 +110,7 @@ describe('Google Naptár szolgáltatás', () => {
   it('eltérő név vagy időpont nem duplikáció', async () => {
     const fetcher = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(
         response({
           items: [
@@ -111,6 +122,7 @@ describe('Google Naptár szolgáltatás', () => {
           ],
         }),
       )
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(
         response({
           items: [
@@ -130,6 +142,7 @@ describe('Google Naptár szolgáltatás', () => {
   it('17–7 esetén kizárólag a 06:59-es naptári befejezést tekinti duplikációnak', async () => {
     const fetcher = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(
         response({
           items: [
@@ -141,6 +154,7 @@ describe('Google Naptár szolgáltatás', () => {
           ],
         }),
       )
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(
         response({
           items: [
@@ -152,6 +166,7 @@ describe('Google Naptár szolgáltatás', () => {
           ],
         }),
       )
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(
         response({
           items: [
@@ -182,7 +197,7 @@ describe('Google Naptár szolgáltatás', () => {
 
     expect(requestBody).toMatchObject({
       summary: 'OMSZ',
-      description: 'Szolgálati jelleg: Parti szolgálat',
+      description: '',
       start: {
         dateTime: '2026-08-31T07:00:00',
         timeZone: 'Europe/Budapest',
@@ -194,7 +209,7 @@ describe('Google Naptár szolgáltatás', () => {
     });
   });
 
-  it('Parti 12 feltöltésnél a request body a 07:00–19:00 időt és a szolgálati leírást használja', async () => {
+  it('Parti 12 feltöltésnél a request body a 07:00–19:00 időt és üres leírást használja', async () => {
     let requestBody: unknown;
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
       if (typeof init?.body !== 'string') throw new Error('Hiányzó JSON request body.');
@@ -206,7 +221,7 @@ describe('Google Naptár szolgáltatás', () => {
 
     expect(requestBody).toMatchObject({
       summary: 'OMSZ',
-      description: 'Szolgálati jelleg: Parti szolgálat',
+      description: '',
       start: {
         dateTime: '2026-08-12T07:00:00',
         timeZone: 'Europe/Budapest',
@@ -229,7 +244,9 @@ describe('Google Naptár szolgáltatás', () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ id: 'created-1', colorId: '10' }))
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ error: { message: 'quota' } }, 429));
     const results = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [
@@ -245,7 +262,9 @@ describe('Google Naptár szolgáltatás', () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ id: 'created-1', colorId: '10' }))
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ id: 'created-2', colorId: '10' }));
 
@@ -333,32 +352,187 @@ describe('Google Naptár szolgáltatás', () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ id: 'created-1', colorId: '5' }));
 
     const [result] = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [item]);
 
     expect(result).toMatchObject({ status: 'Létrehozva' });
-    expect(result?.message).toContain('nem a kért zöld Basil (10) színt igazolta vissza');
+    expect(result?.message).toContain('nem a kiválasztott eseményszínt igazolta vissza');
+    expect(result?.technicalDetails).toContain('Kért colorId: 10');
+    expect(result?.technicalDetails).toContain('Visszakapott colorId: 5');
   });
 
   it('a már létező eseményt nem írja és nem színezi át', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              summary: 'OMSZ',
+              start: { dateTime: '2026-08-10T04:00:00Z' },
+              end: { dateTime: '2026-08-10T16:00:00Z' },
+            },
+          ],
+        }),
+      );
+
+    const [result] = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [item]);
+
+    expect(result?.status).toBe('Már szerepel a naptárban');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.every((call) => call[1]?.method === undefined)).toBe(true);
+  });
+
+  it('a stabil belső azonosítót a cím vizsgálata előtt duplikációként felismeri', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
       response({
         items: [
           {
-            summary: 'OMSZ',
-            start: { dateTime: '2026-08-10T04:00:00Z' },
-            end: { dateTime: '2026-08-10T16:00:00Z' },
+            summary: 'Korábbi egyéni cím',
+            extendedProperties: {
+              private: { beosztasKezeloEventId: item.id },
+            },
           },
         ],
       }),
     );
 
-    const [result] = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [item]);
+    await expect(
+      new GoogleCalendarClient('token', fetcher).isDuplicate('primary', item),
+    ).resolves.toBe(true);
+    expect(requestUrl(fetcher.mock.calls[0]?.[0])).toContain(
+      'privateExtendedProperty=beosztasKezeloEventId%3Devent-1',
+    );
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('egyéni cím mellett a korábbi automatikus OMSZ-címet is legacy duplikációnak tekinti', async () => {
+    const preferences: CalendarExportPreferences = {
+      titleMode: 'custom',
+      customTitle: 'Saját szolgálat',
+      googleColorId: '9',
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              summary: 'OMSZ',
+              start: { dateTime: '2026-08-10T04:00:00Z' },
+              end: { dateTime: '2026-08-10T16:00:00Z' },
+            },
+          ],
+        }),
+      );
+
+    const [result] = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [item], {
+      preferences,
+    });
 
     expect(result?.status).toBe('Már szerepel a naptárban');
-    expect(fetcher).toHaveBeenCalledOnce();
-    expect(fetcher.mock.calls[0]?.[1]?.method).toBeUndefined();
+    expect(fetcher.mock.calls.every((call) => call[1]?.method === undefined)).toBe(true);
+  });
+
+  it('az egyéni címet, választott colorId-t és stabil azonosítót küldi a Google request body-ban', async () => {
+    const preferences: CalendarExportPreferences = {
+      titleMode: 'custom',
+      customTitle: '  Saját szolgálat  ',
+      googleColorId: '9',
+    };
+    let requestBody: unknown;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Hiányzó JSON request body.');
+      requestBody = JSON.parse(init.body) as unknown;
+      return Promise.resolve(response({ id: 'created-custom', colorId: '9' }));
+    });
+
+    await new GoogleCalendarClient('token', fetcher).insertEvent(
+      'primary',
+      item,
+      undefined,
+      preferences,
+    );
+
+    expect(requestBody).toMatchObject({
+      summary: 'Saját szolgálat',
+      colorId: '9',
+      extendedProperties: {
+        private: { beosztasKezeloEventId: item.id },
+      },
+    });
+  });
+
+  it('a kiválasztott címet és színt az eredmény visszajelzésében is rögzíti', async () => {
+    const preferences: CalendarExportPreferences = {
+      titleMode: 'custom',
+      customTitle: 'Saját szolgálat',
+      googleColorId: '9',
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(response({ id: 'created-custom', colorId: '9' }));
+
+    const [result] = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [item], {
+      preferences,
+    });
+
+    expect(result).toMatchObject({
+      status: 'Létrehozva',
+      message: 'Az eseményt a Google Naptár a kiválasztott Kék színnel létrehozta.',
+    });
+    expect(result?.technicalDetails).toContain('Kért colorId: 9');
+    expect(result?.technicalDetails).toContain('Visszakapott colorId: 9');
+    expect(result?.technicalDetails).toContain('Kiválasztott eseménycím: Saját szolgálat');
+    expect(result?.technicalDetails).toContain('Eredeti automatikus eseménycím: OMSZ');
+  });
+
+  it('betölti és colorId szerint rendezi a Google eseményszín-palettáját', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      response({
+        event: {
+          '10': { background: '#51b749', foreground: '#ffffff' },
+          '2': { background: '#7ae7bf', foreground: '#1d1d1d' },
+          '42': { background: '#123456', foreground: '#fedcba' },
+        },
+        calendar: {
+          '99': { background: '#000000', foreground: '#ffffff' },
+        },
+      }),
+    );
+
+    const colors = await new GoogleCalendarClient('token', fetcher).listEventColors();
+
+    expect(colors.map((color) => color.colorId)).toEqual(['2', '10', '42']);
+    expect(colors[1]).toMatchObject({
+      label: 'Sötétzöld',
+      background: '#51b749',
+    });
+    expect(colors[2]).toMatchObject({
+      label: 'Egyéb szín',
+      foreground: '#fedcba',
+    });
+    expect(colors.some((color) => color.colorId === '99')).toBe(false);
+  });
+
+  it('nem egészíti ki fix Basil-elemmel a Google által vissza nem adott palettát', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      response({
+        event: {
+          '3': { background: '#dbadff', foreground: '#1d1d1d' },
+        },
+      }),
+    );
+
+    const colors = await new GoogleCalendarClient('token', fetcher).listEventColors();
+
+    expect(colors.map((color) => color.colorId)).toEqual(['3']);
   });
 
   it('konfiguráció nélkül érthető hibát ad', async () => {

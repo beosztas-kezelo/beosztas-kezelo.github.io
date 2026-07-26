@@ -47,9 +47,7 @@ describe('január 1-jei előző havi áthúzódás', () => {
   ] as const)(
     'előző decemberi lap nélkül a %s 7 részleges %s eseményt készít',
     (fontColor, serviceCategory) => {
-      const result = interpretSchedule([
-        entry(2026, 1, 1, '7', fontColor),
-      ], {});
+      const result = interpretSchedule([entry(2026, 1, 1, '7', fontColor)], {});
 
       expect(result.events).toHaveLength(1);
       expect(result.events[0]).toMatchObject({
@@ -74,9 +72,7 @@ describe('január 1-jei előző havi áthúzódás', () => {
   );
 
   it('ismeretlen színű január 1-jei 7 bizonytalan és nem exportálható', () => {
-    const result = interpretSchedule([
-      entry(2026, 1, 1, '7', '#800080'),
-    ], {});
+    const result = interpretSchedule([entry(2026, 1, 1, '7', '#800080')], {});
 
     expect(result.events).toHaveLength(0);
     expect(result.rows[0]?.status).toBe('Bizonytalan');
@@ -96,10 +92,9 @@ describe('január 1-jei előző havi áthúzódás', () => {
   ])(
     'elérhető december 31-i $marker mellett teljes $shiftType eseményt és nem részlegeset készít',
     ({ marker, shiftType, start }) => {
-      const result = interpretSchedule(
-        [entry(2026, 1, 1, '7')],
-        { previous: entry(2025, 12, 31, marker) },
-      );
+      const result = interpretSchedule([entry(2026, 1, 1, '7')], {
+        previous: entry(2025, 12, 31, marker),
+      });
 
       expect(result.events).toHaveLength(1);
       expect(result.events[0]).toMatchObject({
@@ -111,9 +106,7 @@ describe('január 1-jei előző havi áthúzódás', () => {
   );
 
   it('meglévő december 31-i teljes OMSZ-eseménynél nem küld beszúrást', async () => {
-    const partial = interpretSchedule([
-      entry(2026, 1, 1, '7'),
-    ], {}).events[0];
+    const partial = interpretSchedule([entry(2026, 1, 1, '7')], {}).events[0];
     if (!partial) throw new Error('Hiányzó részleges tesztesemény.');
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       response({
@@ -127,25 +120,23 @@ describe('január 1-jei előző havi áthúzódás', () => {
       }),
     );
 
-    const results = await new GoogleCalendarClient('token', fetcher).addEvents(
-      'primary',
-      [partial],
-    );
+    const results = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [
+      partial,
+    ]);
 
     expect(fetcher).toHaveBeenCalledOnce();
     expect(results[0]).toMatchObject({
       status: 'Már szerepel a naptárban',
-      message:
-        'Már szerepel a naptárban az előző hónapról áthúzódó teljes szolgálat.',
-      technicalDetails: 'Átfedő előző havi teljes esemény található: igen.',
+      message: 'Már szerepel a naptárban az előző hónapról áthúzódó teljes szolgálat.',
     });
+    expect(results[0]?.technicalDetails).toContain(
+      'Átfedő előző havi teljes esemény található: igen.',
+    );
     expect(fetcher.mock.calls.some((call) => call[1]?.method === 'POST')).toBe(false);
   });
 
   it('06:59-kor záródó decemberi teljes eseményt is átfedésként talál meg', async () => {
-    const partial = interpretSchedule([
-      entry(2026, 1, 1, '7'),
-    ], {}).events[0];
+    const partial = interpretSchedule([entry(2026, 1, 1, '7')], {}).events[0];
     if (!partial) throw new Error('Hiányzó részleges tesztesemény.');
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       response({
@@ -168,13 +159,12 @@ describe('január 1-jei előző havi áthúzódás', () => {
   });
 
   it('előző havi átfedés hiányában létrehozza a 00:00–06:59 részleges eseményt', async () => {
-    const partial = interpretSchedule([
-      entry(2026, 1, 1, '7', '#FF0000'),
-    ], {}).events[0];
+    const partial = interpretSchedule([entry(2026, 1, 1, '7', '#FF0000')], {}).events[0];
     if (!partial) throw new Error('Hiányzó részleges tesztesemény.');
     let requestBody: unknown;
     const fetcher = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({ items: [] }))
       .mockImplementationOnce((_input, init) => {
@@ -183,15 +173,16 @@ describe('január 1-jei előző havi áthúzódás', () => {
         return Promise.resolve(response({ id: 'partial', colorId: '10' }));
       });
 
-    const results = await new GoogleCalendarClient('token', fetcher).addEvents(
-      'primary',
-      [partial],
-    );
+    const results = await new GoogleCalendarClient('token', fetcher).addEvents('primary', [
+      partial,
+    ]);
 
     expect(results[0]).toMatchObject({
       status: 'Létrehozva',
-      technicalDetails: 'Átfedő előző havi teljes esemény található: nem.',
     });
+    expect(results[0]?.technicalDetails).toContain(
+      'Átfedő előző havi teljes esemény található: nem.',
+    );
     expect(requestBody).toMatchObject({
       summary: 'OMSZ',
       start: { dateTime: '2026-01-01T00:00:00' },
@@ -199,17 +190,16 @@ describe('január 1-jei előző havi áthúzódás', () => {
     });
   });
 
-  it('az ICS tartalmazza a részleges eseményt és az importálási figyelmeztetést', () => {
-    const partial = interpretSchedule([
-      entry(2026, 1, 1, '7'),
-    ], {}).events[0];
+  it('az ICS tartalmazza a részleges eseményt, de nem exportál technikai figyelmeztetést', () => {
+    const partial = interpretSchedule([entry(2026, 1, 1, '7')], {}).events[0];
     if (!partial) throw new Error('Hiányzó részleges tesztesemény.');
 
     const ics = buildIcs([partial]);
     const unfoldedIcs = ics.replace(/\r\n /g, '');
     expect(ics).toContain('DTSTART;TZID=Europe/Budapest:20260101T000000');
     expect(ics).toContain('DTEND;TZID=Europe/Budapest:20260101T065900');
-    expect(unfoldedIcs).toContain('Előző hónapról áthúzódó részleges szolgálat.');
-    expect(unfoldedIcs).toContain('teljes december 31-i esemény nem szerepel-e már');
+    expect(unfoldedIcs).not.toContain('Előző hónapról áthúzódó részleges szolgálat.');
+    expect(unfoldedIcs).not.toContain('teljes december 31-i esemény nem szerepel-e már');
+    expect(unfoldedIcs).not.toContain('DESCRIPTION:');
   });
 });

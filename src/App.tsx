@@ -1,12 +1,11 @@
-import { useMemo, useRef, useState } from 'react';
-import {
-  STAFF_ROLE_LABELS,
-  STAFF_ROLES,
-  partnerRolesFor,
-} from './domain/staffRoles';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { STAFF_ROLE_LABELS, STAFF_ROLES, partnerRolesFor } from './domain/staffRoles';
 import type {
+  CalendarExportPreferences,
   FileFingerprint,
+  GoogleEventColorOption,
   GoogleEventState,
+  InterpretedEmployeeSchedule,
   RoleWorkbookSession,
   ScheduleResult,
   StaffRole,
@@ -17,18 +16,39 @@ import { createFileFingerprint, fileFingerprintsMatch } from './services/fileIde
 import { buildIcs, downloadIcs, icsFileName } from './services/ics';
 import type { GoogleWriteResult } from './services/googleCalendar';
 import {
+  DEFAULT_GOOGLE_EVENT_COLOR,
+  GOOGLE_COLOR_DEFAULT_MISSING_WARNING,
+  calendarExportPreferencesError,
+  createDefaultCalendarExportPreferences,
+} from './services/calendarExportPreferences';
+import {
+  hashGoogleAccountIdentifier,
+  loadStoredCalendarExportPreferences,
+  moveSavedTitleToFront,
+  preferencesFromStored,
+  saveStoredCalendarExportPreferences,
+  type StoredCalendarExportPreferences,
+} from './services/calendarExportPreferenceStorage';
+import {
   findRoleMonth,
   interpretSelectedEmployee,
   interpretWorksheetEmployees,
 } from './services/scheduleInterpretation';
 import { attachCrewMatches, matchCrewMembers } from './services/crewMatching';
+import {
+  getCrewSearchAvailability,
+  hasUsableOfficerSchedule,
+  requiresOfficerScheduleWarning,
+} from './services/crewSearchAvailability';
 import { monthOptionLabel, monthOptionValue } from './utils/monthOptions';
 import { isGoogleSelectionLocked, isGoogleUploadComplete } from './utils/googleUpload';
 import { deriveWorkflowProgress, type WorkflowStepId } from './utils/workflowProgress';
 import { BackToTopButton } from './components/BackToTopButton';
+import { CalendarEventSettings } from './components/CalendarEventSettings';
 import { ErrorNotice } from './components/ErrorNotice';
-import { FileUpload, type RoleFileView } from './components/FileUpload';
+import { FileUpload, type FileUploadHandle, type RoleFileView } from './components/FileUpload';
 import { GooglePanel } from './components/GooglePanel';
+import { OfficerScheduleWarningDialog } from './components/OfficerScheduleWarningDialog';
 import { ReviewTable } from './components/ReviewTable';
 import { Stepper } from './components/Stepper';
 import { SummaryCards } from './components/SummaryCards';
@@ -54,16 +74,19 @@ function initialRoleFiles(): Record<StaffRole, RoleFileState> {
 
 export default function App() {
   const uploadSectionRef = useRef<HTMLElement>(null);
+  const fileUploadRef = useRef<FileUploadHandle>(null);
   const selectionSectionRef = useRef<HTMLElement>(null);
   const reviewSectionRef = useRef<HTMLElement>(null);
   const exportSectionRef = useRef<HTMLElement>(null);
-  const [roleFiles, setRoleFiles] =
-    useState<Record<StaffRole, RoleFileState>>(initialRoleFiles);
+  const [roleFiles, setRoleFiles] = useState<Record<StaffRole, RoleFileState>>(initialRoleFiles);
   const [selectedRole, setSelectedRole] = useState<StaffRole>();
   const [selectedMonthKey, setSelectedMonthKey] = useState('');
   const [employeeName, setEmployeeName] = useState('');
   const [employeeRow, setEmployeeRow] = useState<number>();
   const [crewSearchEnabled, setCrewSearchEnabled] = useState(false);
+  const [officerWarningOpen, setOfficerWarningOpen] = useState(false);
+  const [officerWarningAcknowledged, setOfficerWarningAcknowledged] = useState(false);
+  const [continuedWithoutOfficer, setContinuedWithoutOfficer] = useState(false);
   const [result, setResult] = useState<ScheduleResult>();
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(new Set());
   const [error, setError] = useState<AppError>();
@@ -73,6 +96,24 @@ export default function App() {
   );
   const [googleUploadResetKey, setGoogleUploadResetKey] = useState(0);
   const [icsExported, setIcsExported] = useState(false);
+  const [calendarExportPreferences, setCalendarExportPreferences] =
+    useState<CalendarExportPreferences>(createDefaultCalendarExportPreferences);
+  const [googleEventColors, setGoogleEventColors] = useState<GoogleEventColorOption[]>([
+    DEFAULT_GOOGLE_EVENT_COLOR,
+  ]);
+  const [googleColorPaletteWarning, setGoogleColorPaletteWarning] = useState<string>();
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [savedCustomTitles, setSavedCustomTitles] = useState<string[]>([]);
+  const [preferencePersistenceUnavailable, setPreferencePersistenceUnavailable] = useState(false);
+  const [colorReloadRequest, setColorReloadRequest] = useState(0);
+  const [calendarSettingsAttentionRequested, setCalendarSettingsAttentionRequested] =
+    useState(false);
+  const preferredGoogleColorIdRef = useRef(DEFAULT_GOOGLE_EVENT_COLOR.colorId);
+  const calendarExportPreferencesRef = useRef<CalendarExportPreferences>(
+    createDefaultCalendarExportPreferences(),
+  );
+  const googleAccountHashRef = useRef<string | undefined>(undefined);
+  const savedCustomTitlesRef = useRef<string[]>([]);
 
   const availableRoles = STAFF_ROLES.filter((role) => roleFiles[role].session);
   const selectedRoleFile = selectedRole ? roleFiles[selectedRole] : undefined;
@@ -81,6 +122,13 @@ export default function App() {
     (month) => monthOptionValue(month) === selectedMonthKey,
   );
   const employee = selectedMonth?.employees.find((item) => item.normalizedName === employeeName);
+  const crewSearchAvailability = getCrewSearchAvailability(
+    roleFiles.driver.session,
+    roleFiles.nurse.session,
+    selectedMonth,
+  );
+  const crewSearchActive = crewSearchEnabled && crewSearchAvailability.enabled;
+  const officerScheduleUsable = hasUsableOfficerSchedule(roleFiles.officer.session, selectedMonth);
   const selectedCalendarEvents = useMemo(
     () =>
       result?.events.filter(
@@ -89,6 +137,7 @@ export default function App() {
       ) ?? [],
     [googleEventStates, result, selectedEvents],
   );
+  const exportPreferencesError = calendarExportPreferencesError(calendarExportPreferences);
   const employeeSelectionComplete = Boolean(
     employeeName && employee && (employee.rows.length === 1 || employeeRow !== undefined),
   );
@@ -110,11 +159,7 @@ export default function App() {
           (role) =>
             role !== selectedRole &&
             roleFiles[role].session &&
-            !findRoleMonth(
-              roleFiles[role].session,
-              selectedMonth.year,
-              selectedMonth.month,
-            ),
+            !findRoleMonth(roleFiles[role].session, selectedMonth.year, selectedMonth.month),
         ).map(
           (role) =>
             `${STAFF_ROLE_LABELS[role]}: a ${selectedMonth.year}. ${selectedMonth.month}. havi munkalap nem található.`,
@@ -138,12 +183,95 @@ export default function App() {
     setGoogleUploadResetKey((current) => current + 1);
   };
 
+  const applyCalendarExportPreferences = (preferences: CalendarExportPreferences) => {
+    calendarExportPreferencesRef.current = preferences;
+    setCalendarExportPreferences(preferences);
+  };
+
+  const applySavedCustomTitles = (titles: string[]) => {
+    savedCustomTitlesRef.current = titles;
+    setSavedCustomTitles(titles);
+  };
+
+  const resetCalendarExportPreferenceSelection = () => {
+    preferredGoogleColorIdRef.current = DEFAULT_GOOGLE_EVENT_COLOR.colorId;
+    applyCalendarExportPreferences(createDefaultCalendarExportPreferences());
+  };
+
+  const persistCalendarExportSettings = (
+    titles: string[],
+    preferences: CalendarExportPreferences,
+  ) => {
+    const accountHash = googleAccountHashRef.current;
+    if (!accountHash) return;
+    const stored: StoredCalendarExportPreferences = {
+      savedCustomTitles: titles,
+      lastSelectedTitleMode: preferences.titleMode,
+      lastSelectedCustomTitle: preferences.titleMode === 'custom' ? preferences.customTitle : '',
+      lastSelectedGoogleColorId: preferences.googleColorId,
+    };
+    if (!saveStoredCalendarExportPreferences(accountHash, stored)) {
+      setPreferencePersistenceUnavailable(true);
+    }
+  };
+
+  const handleGoogleConnectionChange = (connection: {
+    connected: boolean;
+    primaryCalendarId?: string;
+  }) => {
+    if (!connection.connected) {
+      setGoogleConnected(false);
+      setCalendarSettingsAttentionRequested(false);
+      googleAccountHashRef.current = undefined;
+      applySavedCustomTitles([]);
+      setPreferencePersistenceUnavailable(false);
+      setGoogleEventColors([DEFAULT_GOOGLE_EVENT_COLOR]);
+      setGoogleColorPaletteWarning(undefined);
+      resetCalendarExportPreferenceSelection();
+      return;
+    }
+
+    setGoogleConnected(true);
+    if (result && result.events.length > 0) {
+      setCalendarSettingsAttentionRequested(true);
+    }
+    const primaryCalendarId = connection.primaryCalendarId?.trim();
+    if (!primaryCalendarId) {
+      googleAccountHashRef.current = undefined;
+      applySavedCustomTitles([]);
+      setPreferencePersistenceUnavailable(true);
+      resetCalendarExportPreferenceSelection();
+      return;
+    }
+
+    const accountHash = hashGoogleAccountIdentifier(primaryCalendarId);
+    const stored = loadStoredCalendarExportPreferences(accountHash);
+    const nextPreferences = preferencesFromStored(stored);
+    googleAccountHashRef.current = accountHash;
+    applySavedCustomTitles(stored.savedCustomTitles);
+    setPreferencePersistenceUnavailable(false);
+    preferredGoogleColorIdRef.current = nextPreferences.googleColorId;
+    applyCalendarExportPreferences(nextPreferences);
+  };
+
+  const handleCalendarSettingsAttention = useCallback(() => {
+    setCalendarSettingsAttentionRequested(false);
+  }, []);
+
+  const resetOfficerWarningState = () => {
+    setOfficerWarningOpen(false);
+    setOfficerWarningAcknowledged(false);
+    setContinuedWithoutOfficer(false);
+  };
+
   const resetProcessing = () => {
     setResult(undefined);
     setSelectedEvents(new Set());
     setError(undefined);
     setIcsExported(false);
+    resetCalendarExportPreferenceSelection();
     resetGoogleUpload();
+    resetOfficerWarningState();
   };
 
   const resetEmployeeAndProcessing = () => {
@@ -186,10 +314,7 @@ export default function App() {
         (candidateRole) =>
           candidateRole !== role &&
           roleFiles[candidateRole].fingerprint &&
-          fileFingerprintsMatch(
-            fingerprint,
-            roleFiles[candidateRole].fingerprint,
-          ),
+          fileFingerprintsMatch(fingerprint, roleFiles[candidateRole].fingerprint),
       );
       if (duplicateRole) {
         throw new AppError(
@@ -219,8 +344,7 @@ export default function App() {
     } catch (caught) {
       const appError = toAppError(caught);
       const hasOtherSuccessfulRole = STAFF_ROLES.some(
-        (candidateRole) =>
-          candidateRole !== role && roleFiles[candidateRole].session !== undefined,
+        (candidateRole) => candidateRole !== role && roleFiles[candidateRole].session !== undefined,
       );
       setRoleFiles((current) => ({
         ...current,
@@ -296,13 +420,48 @@ export default function App() {
   };
 
   const toggleCrewSearch = (enabled: boolean) => {
+    if (enabled && !crewSearchAvailability.enabled) return;
     setCrewSearchEnabled(enabled);
     resetProcessing();
   };
 
-  const processSchedule = () => {
+  const finishScheduleProcessing = (
+    primary: InterpretedEmployeeSchedule,
+    proceededWithoutOfficer: boolean,
+  ) => {
+    let interpreted = primary.result;
+    if (crewSearchActive && selectedMonth && selectedRole) {
+      const sources = partnerRolesFor(selectedRole).map((role) => {
+        const supplementalSession = roleFiles[role].session;
+        if (!supplementalSession) {
+          return { role, status: 'missing-file' as const, employees: [] };
+        }
+        const supplementalMonth = findRoleMonth(
+          supplementalSession,
+          selectedMonth.year,
+          selectedMonth.month,
+        );
+        if (!supplementalMonth) {
+          return { role, status: 'missing-month' as const, employees: [] };
+        }
+        return {
+          role,
+          status: 'available' as const,
+          employees: interpretWorksheetEmployees(supplementalSession, supplementalMonth, role),
+        };
+      });
+      interpreted = attachCrewMatches(interpreted, matchCrewMembers(primary, sources));
+    }
+    setOfficerWarningOpen(false);
+    setContinuedWithoutOfficer(proceededWithoutOfficer);
+    setResult(interpreted);
+    setSelectedEvents(new Set(interpreted.events.map((event) => event.id)));
+  };
+
+  const processSchedule = (allowMissingOfficer = false) => {
     setError(undefined);
     setIcsExported(false);
+    resetCalendarExportPreferenceSelection();
     resetGoogleUpload();
     if (!session || !selectedRole || !selectedMonth || !employeeName) {
       setError(new AppError('EMPLOYEE_NOT_FOUND'));
@@ -322,41 +481,33 @@ export default function App() {
         employeeName,
         employeeRow,
       );
-      let interpreted = primary.result;
-      if (crewSearchEnabled) {
-        const sources = partnerRolesFor(selectedRole).map((role) => {
-          const supplementalSession = roleFiles[role].session;
-          if (!supplementalSession) {
-            return { role, status: 'missing-file' as const, employees: [] };
-          }
-          const supplementalMonth = findRoleMonth(
-            supplementalSession,
-            selectedMonth.year,
-            selectedMonth.month,
-          );
-          if (!supplementalMonth) {
-            return { role, status: 'missing-month' as const, employees: [] };
-          }
-          return {
-            role,
-            status: 'available' as const,
-            employees: interpretWorksheetEmployees(
-              supplementalSession,
-              supplementalMonth,
-              role,
-            ),
-          };
-        });
-        interpreted = attachCrewMatches(
-          interpreted,
-          matchCrewMembers(primary, sources),
-        );
+      const officerScheduleRequired = requiresOfficerScheduleWarning(
+        primary.result.events,
+        crewSearchActive,
+        officerScheduleUsable,
+      );
+      if (officerScheduleRequired && !officerWarningAcknowledged && !allowMissingOfficer) {
+        setOfficerWarningOpen(true);
+        return;
       }
-      setResult(interpreted);
-      setSelectedEvents(new Set(interpreted.events.map((event) => event.id)));
+      finishScheduleProcessing(
+        primary,
+        officerScheduleRequired && (officerWarningAcknowledged || allowMissingOfficer),
+      );
     } catch (caught) {
       setError(toAppError(caught));
     }
+  };
+
+  const uploadOfficerSchedule = () => {
+    setOfficerWarningOpen(false);
+    fileUploadRef.current?.openRolePicker('officer');
+  };
+
+  const continueWithoutOfficerSchedule = () => {
+    setOfficerWarningAcknowledged(true);
+    setOfficerWarningOpen(false);
+    processSchedule(true);
   };
 
   const toggleEvent = (id: string) => {
@@ -384,9 +535,16 @@ export default function App() {
   };
 
   const exportIcs = () => {
-    if (!selectedMonth || !employee || selectedCalendarEvents.length === 0) return;
+    if (
+      !selectedMonth ||
+      !employee ||
+      selectedCalendarEvents.length === 0 ||
+      exportPreferencesError
+    ) {
+      return;
+    }
     downloadIcs(
-      buildIcs(selectedCalendarEvents),
+      buildIcs(selectedCalendarEvents, new Date(), calendarExportPreferences),
       icsFileName(employee.name, selectedMonth.year, selectedMonth.month),
     );
     setIcsExported(true);
@@ -427,6 +585,103 @@ export default function App() {
     setIcsExported(false);
   };
 
+  const useAutomaticEventTitle = () => {
+    const nextPreferences: CalendarExportPreferences = {
+      ...calendarExportPreferencesRef.current,
+      titleMode: 'automatic',
+      customTitle: '',
+    };
+    applyCalendarExportPreferences(nextPreferences);
+    persistCalendarExportSettings(savedCustomTitlesRef.current, nextPreferences);
+    setIcsExported(false);
+  };
+
+  const useSavedEventTitle = (title: string) => {
+    const nextTitles = moveSavedTitleToFront(savedCustomTitlesRef.current, title);
+    const selectedTitle = nextTitles[0] ?? '';
+    const nextPreferences: CalendarExportPreferences = {
+      ...calendarExportPreferencesRef.current,
+      titleMode: 'custom',
+      customTitle: selectedTitle,
+    };
+    applySavedCustomTitles(nextTitles);
+    applyCalendarExportPreferences(nextPreferences);
+    persistCalendarExportSettings(nextTitles, nextPreferences);
+    setIcsExported(false);
+  };
+
+  const deleteSavedEventTitle = (title: string) => {
+    const normalized = title.toLocaleLowerCase('hu-HU');
+    const nextTitles = savedCustomTitlesRef.current.filter(
+      (candidate) => candidate.toLocaleLowerCase('hu-HU') !== normalized,
+    );
+    const currentPreferences = calendarExportPreferencesRef.current;
+    const deletedWasSelected =
+      currentPreferences.titleMode === 'custom' &&
+      currentPreferences.customTitle.toLocaleLowerCase('hu-HU') === normalized;
+    const nextPreferences: CalendarExportPreferences = deletedWasSelected
+      ? {
+          ...currentPreferences,
+          titleMode: 'automatic',
+          customTitle: '',
+        }
+      : currentPreferences;
+    applySavedCustomTitles(nextTitles);
+    applyCalendarExportPreferences(nextPreferences);
+    persistCalendarExportSettings(nextTitles, nextPreferences);
+    setIcsExported(false);
+  };
+
+  const selectGoogleEventColor = (colorId: string) => {
+    preferredGoogleColorIdRef.current = colorId;
+    const nextPreferences: CalendarExportPreferences = {
+      ...calendarExportPreferencesRef.current,
+      googleColorId: colorId,
+    };
+    applyCalendarExportPreferences(nextPreferences);
+    persistCalendarExportSettings(savedCustomTitlesRef.current, nextPreferences);
+  };
+
+  const resetCalendarExportDefaults = () => {
+    const nextPreferences = createDefaultCalendarExportPreferences();
+    if (!googleEventColors.some((color) => color.colorId === DEFAULT_GOOGLE_EVENT_COLOR.colorId)) {
+      nextPreferences.googleColorId =
+        googleEventColors[0]?.colorId ?? DEFAULT_GOOGLE_EVENT_COLOR.colorId;
+    }
+    preferredGoogleColorIdRef.current = nextPreferences.googleColorId;
+    applyCalendarExportPreferences(nextPreferences);
+    persistCalendarExportSettings(savedCustomTitlesRef.current, nextPreferences);
+    setIcsExported(false);
+  };
+
+  const applyGoogleEventColors = (colors: GoogleEventColorOption[], warning?: string) => {
+    setGoogleEventColors(colors);
+    const hasDefaultColor = colors.some(
+      (color) => color.colorId === DEFAULT_GOOGLE_EVENT_COLOR.colorId,
+    );
+    const preferredColorId = preferredGoogleColorIdRef.current;
+    const preferredAvailable = colors.some((color) => color.colorId === preferredColorId);
+    const nextColorId = preferredAvailable
+      ? preferredColorId
+      : hasDefaultColor
+        ? DEFAULT_GOOGLE_EVENT_COLOR.colorId
+        : (colors[0]?.colorId ?? DEFAULT_GOOGLE_EVENT_COLOR.colorId);
+    const nextWarning =
+      warning ??
+      (!hasDefaultColor && colors.length > 0 ? GOOGLE_COLOR_DEFAULT_MISSING_WARNING : undefined);
+    setGoogleColorPaletteWarning(nextWarning);
+
+    const nextPreferences: CalendarExportPreferences = {
+      ...calendarExportPreferencesRef.current,
+      googleColorId: nextColorId,
+    };
+    applyCalendarExportPreferences(nextPreferences);
+    if (!warning && !preferredAvailable) {
+      preferredGoogleColorIdRef.current = nextColorId;
+      persistCalendarExportSettings(savedCustomTitlesRef.current, nextPreferences);
+    }
+  };
+
   const startNewSchedule = () => {
     setRoleFiles(initialRoleFiles());
     setSelectedRole(undefined);
@@ -439,6 +694,8 @@ export default function App() {
     setError(undefined);
     setNotice('');
     setIcsExported(false);
+    resetOfficerWarningState();
+    resetCalendarExportPreferenceSelection();
     resetGoogleUpload();
     uploadSectionRef.current?.scrollIntoView?.({
       behavior: 'smooth',
@@ -478,6 +735,7 @@ export default function App() {
       <main>
         <Stepper steps={workflowSteps} onNavigate={navigateWorkflow} />
         <FileUpload
+          ref={fileUploadRef}
           sectionRef={uploadSectionRef}
           files={roleFiles}
           disabled={busy}
@@ -488,6 +746,12 @@ export default function App() {
         {notice && (
           <div className="notice warning" role="status">
             {notice}
+          </div>
+        )}
+        {continuedWithoutOfficer && (
+          <div className="notice warning" role="status">
+            A feldolgozás mentőtiszti beosztás nélkül folytatódott. Az esetkocsis társlista ezért
+            hiányos lehet.
           </div>
         )}
 
@@ -562,12 +826,18 @@ export default function App() {
             <label className="crew-search-toggle">
               <input
                 type="checkbox"
-                checked={crewSearchEnabled}
+                checked={crewSearchActive}
+                disabled={!crewSearchAvailability.enabled}
+                aria-describedby="crew-search-availability"
                 onChange={(event) => toggleCrewSearch(event.target.checked)}
               />
               <span>
                 <strong>Szolgálati társak keresése</strong>
-                <small>A többi feltöltött munkaköri beosztás alapján.</small>
+                <small id="crew-search-availability">
+                  {crewSearchAvailability.enabled
+                    ? 'A gépkocsivezetői és a mentőápolói beosztás kiválasztott hónapja alapján.'
+                    : crewSearchAvailability.message}
+                </small>
               </span>
             </label>
             {selectedMonth && selectedMonth.warnings.length > 0 && (
@@ -597,7 +867,7 @@ export default function App() {
                 !employeeName ||
                 (Boolean(employee && employee.rows.length > 1) && employeeRow === undefined)
               }
-              onClick={processSchedule}
+              onClick={() => processSchedule()}
             >
               Beosztás feldolgozása
             </button>
@@ -612,7 +882,7 @@ export default function App() {
               rows={result.rows}
               selected={selectedEvents}
               googleStates={googleEventStates}
-              crewSearchEnabled={crewSearchEnabled}
+              crewSearchEnabled={crewSearchActive}
               onToggle={toggleEvent}
               onSelectAll={selectAll}
             />
@@ -628,12 +898,16 @@ export default function App() {
                   <strong>{selectedCalendarEvents.length}</strong> kijelölt, biztos esemény kerül az
                   ICS-fájlba.
                 </p>
+                <p className="notice neutral ics-color-note">
+                  Az ICS-fájl tartalmazza a kiválasztott eseménynevet. Az esemény színét az
+                  importáláshoz használt naptáralkalmazás határozza meg.
+                </p>
               </div>
               <button
                 type="button"
                 className="button primary"
                 onClick={exportIcs}
-                disabled={selectedCalendarEvents.length === 0}
+                disabled={selectedCalendarEvents.length === 0 || Boolean(exportPreferencesError)}
               >
                 ICS letöltése
               </button>
@@ -648,6 +922,37 @@ export default function App() {
           onResult={applyGoogleResult}
           onCalendarChange={resetAfterCalendarChange}
           onNewSchedule={startNewSchedule}
+          preferences={calendarExportPreferences}
+          preferencesError={exportPreferencesError}
+          onEventColorsChange={applyGoogleEventColors}
+          onConnectionChange={handleGoogleConnectionChange}
+          colorReloadRequest={colorReloadRequest}
+          eventSettings={
+            googleConnected && result && result.events.length > 0 ? (
+              <CalendarEventSettings
+                events={selectedCalendarEvents}
+                preferences={calendarExportPreferences}
+                colors={googleEventColors}
+                savedCustomTitles={savedCustomTitles}
+                paletteWarning={googleColorPaletteWarning}
+                persistenceUnavailable={preferencePersistenceUnavailable}
+                attentionRequested={calendarSettingsAttentionRequested}
+                onAttentionHandled={handleCalendarSettingsAttention}
+                onUseAutomatic={useAutomaticEventTitle}
+                onUseSavedTitle={useSavedEventTitle}
+                onSaveCustomTitle={useSavedEventTitle}
+                onDeleteCustomTitle={deleteSavedEventTitle}
+                onColorChange={selectGoogleEventColor}
+                onReloadColors={() => setColorReloadRequest((current) => current + 1)}
+                onReset={resetCalendarExportDefaults}
+              />
+            ) : undefined
+          }
+        />
+        <OfficerScheduleWarningDialog
+          open={officerWarningOpen}
+          onUploadOfficerSchedule={uploadOfficerSchedule}
+          onContinueWithoutOfficer={continueWithoutOfficerSchedule}
         />
       </main>
       <BackToTopButton />

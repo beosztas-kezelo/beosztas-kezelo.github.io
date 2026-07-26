@@ -1,7 +1,11 @@
-import type { CalendarEvent } from '../domain/types';
+import type { CalendarEvent, CalendarExportPreferences } from '../domain/types';
 import { HUNGARIAN_MONTHS } from '../domain/types';
 import { safeFileStem } from '../utils/normalize';
 import { calendarEventDescription } from './calendarEventDescription';
+import {
+  DEFAULT_CALENDAR_EXPORT_PREFERENCES,
+  resolveCalendarEventTitle,
+} from './calendarExportPreferences';
 
 const CRLF = '\r\n';
 
@@ -19,7 +23,7 @@ export function formatIcsLocal(value: string): string {
 
 export function stableUid(item: CalendarEvent): string {
   let hash = 0x811c9dc5;
-  const value = `${item.summary}|${item.calendarTime.start}|${item.calendarTime.end}|${item.shiftType}|${item.serviceCategory}`;
+  const value = `${item.id}|${item.calendarTime.start}|${item.calendarTime.end}|${item.shiftType}|${item.serviceCategory}`;
   for (const character of value) {
     hash ^= character.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
@@ -74,7 +78,11 @@ const TIME_ZONE_BLOCK = [
   'END:VTIMEZONE',
 ];
 
-export function buildIcs(events: CalendarEvent[], generatedAt = new Date()): string {
+export function buildIcs(
+  events: CalendarEvent[],
+  generatedAt = new Date(),
+  preferences: CalendarExportPreferences = DEFAULT_CALENDAR_EXPORT_PREFERENCES,
+): string {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -84,14 +92,15 @@ export function buildIcs(events: CalendarEvent[], generatedAt = new Date()): str
     ...TIME_ZONE_BLOCK,
   ];
   for (const item of events) {
+    const description = calendarEventDescription(item);
     lines.push(
       'BEGIN:VEVENT',
       `UID:${stableUid(item)}`,
       `DTSTAMP:${dtstamp(generatedAt)}`,
       `DTSTART;TZID=Europe/Budapest:${formatIcsLocal(item.calendarTime.start)}`,
       `DTEND;TZID=Europe/Budapest:${formatIcsLocal(item.calendarTime.end)}`,
-      `SUMMARY:${escapeIcsText(item.summary)}`,
-      `DESCRIPTION:${escapeIcsText(calendarEventDescription(item, 'ics'))}`,
+      `SUMMARY:${escapeIcsText(resolveCalendarEventTitle(item, preferences))}`,
+      ...(description ? [`DESCRIPTION:${escapeIcsText(description)}`] : []),
       'END:VEVENT',
     );
   }

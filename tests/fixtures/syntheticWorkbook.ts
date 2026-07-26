@@ -106,6 +106,12 @@ export interface RoleWorkbookOptions {
   monthName?: string;
   marker?: string | number;
   fontColor?: string;
+  additionalEmployeeNames?: string[];
+  additionalMonths?: Array<{
+    sheetName: string;
+    year: number;
+    monthName: string;
+  }>;
 }
 
 export async function roleWorkbookBuffer({
@@ -115,20 +121,30 @@ export async function roleWorkbookBuffer({
   monthName = 'augusztus',
   marker = 12,
   fontColor = '#000000',
+  additionalEmployeeNames = [],
+  additionalMonths = [],
 }: RoleWorkbookOptions): Promise<ArrayBuffer> {
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(sheetName);
-  sheet.getCell('B2').value = `${year}. ${monthName}`;
-  sheet.getCell('B4').value = 'Név';
-  for (let day = 1; day <= 31; day += 1) {
-    sheet.getCell(4, 3 + (day - 1) * 2).value = day;
+  const employees = [employeeName, ...additionalEmployeeNames];
+  const months = [{ sheetName, year, monthName }, ...additionalMonths];
+
+  for (const month of months) {
+    const sheet = workbook.addWorksheet(month.sheetName);
+    sheet.getCell('B2').value = `${month.year}. ${month.monthName}`;
+    sheet.getCell('B4').value = 'Név';
+    for (let day = 1; day <= 31; day += 1) {
+      sheet.getCell(4, 3 + (day - 1) * 2).value = day;
+    }
+    employees.forEach((name, index) => {
+      const row = 5 + index * 2;
+      sheet.getCell(row, 2).value = name;
+      sheet.getCell(row, 3).value = marker;
+      sheet.getCell(row, 3).font = {
+        color: { argb: `FF${fontColor.replace('#', '').slice(-6).toUpperCase()}` },
+      };
+    });
+    sheet.getCell(5 + employees.length * 2, 2).value = 'Összesen:';
   }
-  sheet.getCell('B5').value = employeeName;
-  sheet.getCell('B7').value = 'Összesen:';
-  sheet.getCell('C5').value = marker;
-  sheet.getCell('C5').font = {
-    color: { argb: `FF${fontColor.replace('#', '').slice(-6).toUpperCase()}` },
-  };
 
   const result = new Uint8Array(await workbook.xlsx.writeBuffer());
   return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);

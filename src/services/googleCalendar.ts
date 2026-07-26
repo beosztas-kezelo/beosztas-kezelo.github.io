@@ -1,16 +1,20 @@
-import type { CalendarEvent, ReviewStatus } from '../domain/types';
+import type {
+  CalendarEvent,
+  CalendarExportPreferences,
+  GoogleEventColorOption,
+  ReviewStatus,
+} from '../domain/types';
 import { AppError, type AppErrorCode } from '../domain/errors';
 import { calendarEventDescription } from './calendarEventDescription';
 import {
-  addDays,
-  instantToLocal,
-  localDateKey,
-  localDateTime,
-  zonedLocalToInstant,
-} from './dates';
+  DEFAULT_CALENDAR_EXPORT_PREFERENCES,
+  googleEventColorLabel,
+  resolveCalendarEventTitle,
+} from './calendarExportPreferences';
+import { addDays, instantToLocal, localDateKey, localDateTime, zonedLocalToInstant } from './dates';
 
 const API_ROOT = 'https://www.googleapis.com/calendar/v3';
-const GOOGLE_EVENT_COLOR_ID = '10';
+export const BEOSZTAS_KEZELO_EVENT_ID_PROPERTY = 'beosztasKezeloEventId';
 
 const browserFetch: typeof fetch = (input, init) => window.fetch(input, init);
 
@@ -27,6 +31,9 @@ interface GoogleEventItem {
   colorId?: string;
   start?: { dateTime?: string; timeZone?: string };
   end?: { dateTime?: string; timeZone?: string };
+  extendedProperties?: {
+    private?: Record<string, string>;
+  };
 }
 
 interface CalendarListResponse {
@@ -35,6 +42,10 @@ interface CalendarListResponse {
 
 interface EventsResponse {
   items?: GoogleEventItem[];
+}
+
+interface ColorsResponse {
+  event?: Record<string, { background?: string; foreground?: string }>;
 }
 
 export interface GoogleWriteResult {
@@ -53,8 +64,24 @@ export interface GoogleWriteResult {
 
 export interface GoogleUploadOptions {
   signal?: AbortSignal;
+  preferences?: CalendarExportPreferences;
   onStart?: (event: CalendarEvent) => void;
   onResult?: (result: GoogleWriteResult) => void;
+}
+
+function googleTechnicalDetails(
+  item: CalendarEvent,
+  preferences: CalendarExportPreferences,
+  returnedColorId?: string,
+  extra?: string,
+): string {
+  return [
+    `Kért colorId: ${preferences.googleColorId}`,
+    `Visszakapott colorId: ${returnedColorId ?? '—'}`,
+    `Kiválasztott eseménycím: ${resolveCalendarEventTitle(item, preferences)}`,
+    `Eredeti automatikus eseménycím: ${item.summary}`,
+    ...(extra ? [extra] : []),
+  ].join('\n');
 }
 
 async function parseGoogleError(response: Response): Promise<AppError> {
@@ -96,11 +123,42 @@ export class GoogleCalendarClient {
     return (response.items ?? []).filter((item) => ['owner', 'writer'].includes(item.accessRole));
   }
 
+  async listEventColors(): Promise<GoogleEventColorOption[]> {
+    const response = await this.request<ColorsResponse>('/colors');
+    return Object.entries(response.event ?? {})
+      .map(([colorId, value]) => ({
+        colorId,
+        background: value.background ?? '#5F6368',
+        foreground: value.foreground ?? '#FFFFFF',
+        label: googleEventColorLabel(colorId),
+      }))
+      .sort((left, right) => Number(left.colorId) - Number(right.colorId));
+  }
+
   async isDuplicate(
     calendarId: string,
     item: CalendarEvent,
     signal?: AbortSignal,
+    preferences: CalendarExportPreferences = DEFAULT_CALENDAR_EXPORT_PREFERENCES,
   ): Promise<boolean> {
+    const stableIdQuery = new URLSearchParams({
+      privateExtendedProperty: `${BEOSZTAS_KEZELO_EVENT_ID_PROPERTY}=${item.id}`,
+      singleEvents: 'true',
+      showDeleted: 'false',
+    });
+    const stableIdResponse = await this.request<EventsResponse>(
+      `/calendars/${encodeURIComponent(calendarId)}/events?${stableIdQuery.toString()}`,
+      { signal },
+    );
+    if (
+      (stableIdResponse.items ?? []).some(
+        (candidate) =>
+          candidate.extendedProperties?.private?.[BEOSZTAS_KEZELO_EVENT_ID_PROPERTY] === item.id,
+      )
+    ) {
+      return true;
+    }
+
     const start = zonedLocalToInstant(item.calendarTime.start);
     const end = zonedLocalToInstant(item.calendarTime.end);
     const query = new URLSearchParams({
@@ -113,10 +171,18 @@ export class GoogleCalendarClient {
       `/calendars/${encodeURIComponent(calendarId)}/events?${query.toString()}`,
       { signal },
     );
+    const acceptedTitles = new Set([resolveCalendarEventTitle(item, preferences), item.summary]);
     return (response.items ?? []).some((candidate) => {
       const startValue = candidate.start?.dateTime;
       const endValue = candidate.end?.dateTime;
-      if (!startValue || !endValue || candidate.summary !== item.summary) return false;
+      if (
+        !startValue ||
+        !endValue ||
+        !candidate.summary ||
+        !acceptedTitles.has(candidate.summary)
+      ) {
+        return false;
+      }
       return (
         instantToLocal(startValue) === item.calendarTime.start &&
         instantToLocal(endValue) === item.calendarTime.end
@@ -128,13 +194,11 @@ export class GoogleCalendarClient {
     calendarId: string,
     item: CalendarEvent,
     signal?: AbortSignal,
+    preferences: CalendarExportPreferences = DEFAULT_CALENDAR_EXPORT_PREFERENCES,
   ): Promise<boolean> {
     if (item.specialKind !== 'previous-month-carryover-partial') return false;
 
-    const [year, month, day] = item.calendarTime.start
-      .slice(0, 10)
-      .split('-')
-      .map(Number);
+    const [year, month, day] = item.calendarTime.start.slice(0, 10).split('-').map(Number);
     if (!year || !month || !day) return false;
     const partialDate = { year, month, day };
     const previousDate = addDays(partialDate, -1);
@@ -153,11 +217,19 @@ export class GoogleCalendarClient {
     );
     const previousDateKey = localDateKey(previousDate);
     const partialDateKey = localDateKey(partialDate);
+    const acceptedTitles = new Set([resolveCalendarEventTitle(item, preferences), item.summary]);
 
     return (response.items ?? []).some((candidate) => {
       const startValue = candidate.start?.dateTime;
       const endValue = candidate.end?.dateTime;
-      if (!startValue || !endValue || candidate.summary !== 'OMSZ') return false;
+      if (
+        !startValue ||
+        !endValue ||
+        !candidate.summary ||
+        !acceptedTitles.has(candidate.summary)
+      ) {
+        return false;
+      }
       const candidateStartLocal = instantToLocal(startValue);
       const candidateEndLocal = instantToLocal(endValue);
       const acceptedEnd =
@@ -168,10 +240,7 @@ export class GoogleCalendarClient {
       }
       const candidateStart = new Date(startValue).getTime();
       const candidateEnd = new Date(endValue).getTime();
-      return (
-        candidateStart < partialEnd.getTime() &&
-        candidateEnd > partialStart.getTime()
-      );
+      return candidateStart < partialEnd.getTime() && candidateEnd > partialStart.getTime();
     });
   }
 
@@ -179,16 +248,22 @@ export class GoogleCalendarClient {
     calendarId: string,
     item: CalendarEvent,
     signal?: AbortSignal,
+    preferences: CalendarExportPreferences = DEFAULT_CALENDAR_EXPORT_PREFERENCES,
   ): Promise<GoogleEventItem> {
     return this.request<GoogleEventItem>(`/calendars/${encodeURIComponent(calendarId)}/events`, {
       method: 'POST',
       signal,
       body: JSON.stringify({
-        summary: item.summary,
+        summary: resolveCalendarEventTitle(item, preferences),
         description: calendarEventDescription(item),
         start: { dateTime: item.calendarTime.start, timeZone: item.timeZone },
         end: { dateTime: item.calendarTime.end, timeZone: item.timeZone },
-        colorId: GOOGLE_EVENT_COLOR_ID,
+        colorId: preferences.googleColorId,
+        extendedProperties: {
+          private: {
+            [BEOSZTAS_KEZELO_EVENT_ID_PROPERTY]: item.id,
+          },
+        },
       }),
     });
   }
@@ -199,6 +274,7 @@ export class GoogleCalendarClient {
     options: GoogleUploadOptions = {},
   ): Promise<GoogleWriteResult[]> {
     const results: GoogleWriteResult[] = [];
+    const preferences = options.preferences ?? DEFAULT_CALENDAR_EXPORT_PREFERENCES;
     for (const item of events) {
       if (options.signal?.aborted) break;
       options.onStart?.(item);
@@ -211,38 +287,48 @@ export class GoogleCalendarClient {
                 calendarId,
                 item,
                 options.signal,
+                preferences,
               )
             : undefined;
         const duplicate =
           carryoverOverlap === undefined
-            ? await this.isDuplicate(calendarId, item, options.signal)
+            ? await this.isDuplicate(calendarId, item, options.signal, preferences)
             : carryoverOverlap ||
-              (await this.isDuplicate(calendarId, item, options.signal));
+              (await this.isDuplicate(calendarId, item, options.signal, preferences));
         if (duplicate) {
           result = {
             eventId: item.id,
             status: 'Már szerepel a naptárban',
             message: carryoverOverlap
               ? 'Már szerepel a naptárban az előző hónapról áthúzódó teljes szolgálat.'
-              : 'Azonos nevű és időpontú esemény már létezik.',
-            technicalDetails:
+              : 'Azonos belső azonosítójú vagy azonos nevű és időpontú esemény már létezik.',
+            technicalDetails: googleTechnicalDetails(
+              item,
+              preferences,
+              undefined,
               carryoverOverlap === undefined
                 ? undefined
                 : 'Átfedő előző havi teljes esemény található: igen.',
+            ),
           };
         } else {
-          const created = await this.insertEvent(calendarId, item, options.signal);
-          const colorConfirmed = created.colorId === GOOGLE_EVENT_COLOR_ID;
+          const created = await this.insertEvent(calendarId, item, options.signal, preferences);
+          const colorConfirmed = created.colorId === preferences.googleColorId;
+          const selectedColorLabel = googleEventColorLabel(preferences.googleColorId);
           result = {
             eventId: item.id,
             status: 'Létrehozva',
             message: colorConfirmed
-              ? 'Az eseményt a Google Naptár a zöld Basil (10) színnel létrehozta.'
-              : 'Az esemény létrejött, de a Google nem a kért zöld Basil (10) színt igazolta vissza.',
-            technicalDetails:
+              ? `Az eseményt a Google Naptár a kiválasztott ${selectedColorLabel} színnel létrehozta.`
+              : 'Az esemény létrejött, de a Google nem a kiválasztott eseményszínt igazolta vissza.',
+            technicalDetails: googleTechnicalDetails(
+              item,
+              preferences,
+              created.colorId,
               carryoverOverlap === undefined
                 ? undefined
                 : 'Átfedő előző havi teljes esemény található: nem.',
+            ),
           };
         }
       } catch (error) {
@@ -265,7 +351,12 @@ export class GoogleCalendarClient {
             appError.code === 'GOOGLE_API_ERROR'
               ? appError.code
               : 'GOOGLE_API_ERROR',
-          technicalDetails: appError.technicalDetails,
+          technicalDetails: googleTechnicalDetails(
+            item,
+            preferences,
+            undefined,
+            appError.technicalDetails,
+          ),
         };
       }
       results.push(result);

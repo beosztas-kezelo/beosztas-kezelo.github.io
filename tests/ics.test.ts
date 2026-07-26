@@ -21,7 +21,7 @@ describe('ICS-generátor', () => {
     expect(content).toContain('BEGIN:VTIMEZONE\r\nTZID:Europe/Budapest');
     expect(content).toContain('DTSTART;TZID=Europe/Budapest:20260810T060000');
     expect(content).toContain('DTEND;TZID=Europe/Budapest:20260810T180000');
-    expect(content).toContain('DESCRIPTION:Szolgálati jelleg: Nappalos 06–18');
+    expect(content).not.toContain('DESCRIPTION:');
     expect(content).toContain('RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU');
     expect(content.endsWith('\r\n')).toBe(true);
   });
@@ -37,6 +37,61 @@ describe('ICS-generátor', () => {
     expect(content.match(/BEGIN:VEVENT/g)).toHaveLength(2);
     expect(stableUid(first)).toBe(stableUid(first));
     expect(stableUid(first)).not.toBe(stableUid(second));
+  });
+
+  it('az OMSZ és KMR automatikus címeket változatlanul exportálja', () => {
+    const content = buildIcs([
+      calendarEvent('omsz', 'OMSZ'),
+      {
+        ...calendarEvent('kmr', 'KMR'),
+        calendarTime: {
+          start: '2026-08-11T05:00:00',
+          end: '2026-08-12T01:00:00',
+        },
+      },
+    ]);
+
+    expect(content).toContain('SUMMARY:OMSZ');
+    expect(content).toContain('SUMMARY:KMR');
+  });
+
+  it('az egyéni, körbevágott címet minden kiválasztott eseménybe beírja', () => {
+    const content = buildIcs(
+      [calendarEvent('omsz'), calendarEvent('kmr', 'KMR')],
+      new Date('2026-01-01T00:00:00Z'),
+      {
+        titleMode: 'custom',
+        customTitle: '  Saját szolgálat  ',
+        googleColorId: '9',
+      },
+    );
+
+    expect(content.match(/SUMMARY:Saját szolgálat/g)).toHaveLength(2);
+  });
+
+  it('a Google colorId-t nem írja az ICS-tartalomba', () => {
+    const content = buildIcs([calendarEvent('a')], new Date('2026-01-01T00:00:00Z'), {
+      titleMode: 'automatic',
+      customTitle: '',
+      googleColorId: '9',
+    });
+
+    expect(content).not.toContain('COLOR');
+    expect(content).not.toContain('colorId');
+  });
+
+  it('a cím és a Google-szín átállítása nem módosítja a stabil ICS UID-t', () => {
+    const event = calendarEvent('stable');
+    const automatic = buildIcs([event], new Date('2026-01-01T00:00:00Z'));
+    const customized = buildIcs([event], new Date('2026-01-01T00:00:00Z'), {
+      titleMode: 'custom',
+      customTitle: 'Más név',
+      googleColorId: '9',
+    });
+    const uid = `UID:${stableUid(event)}`;
+
+    expect(automatic).toContain(uid);
+    expect(customized).toContain(uid);
   });
 
   it('a 17–7 szolgálatot 07:00-tól másnap 06:59-ig exportálja', () => {

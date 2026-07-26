@@ -250,7 +250,7 @@ describe('helyi, nem követett Excel-minta regresszió', () => {
       const ics = buildIcs([row.event]);
       expect(ics).toContain('DTSTART;TZID=Europe/Budapest:20260826T070000');
       expect(ics).toContain('DTEND;TZID=Europe/Budapest:20260826T190000');
-      expect(ics).toContain('DESCRIPTION:Szolgálati jelleg: Parti szolgálat');
+      expect(ics).not.toContain('DESCRIPTION:');
 
       let requestBody: unknown;
       const fetcher: typeof fetch = (_input, init) => {
@@ -266,7 +266,7 @@ describe('helyi, nem követett Excel-minta regresszió', () => {
       await new GoogleCalendarClient('token', fetcher).insertEvent('primary', row.event);
       expect(requestBody).toMatchObject({
         summary: 'OMSZ',
-        description: 'Szolgálati jelleg: Parti szolgálat',
+        description: '',
         start: { dateTime: '2026-08-26T07:00:00', timeZone: 'Europe/Budapest' },
         end: { dateTime: '2026-08-26T19:00:00', timeZone: 'Europe/Budapest' },
         colorId: '10',

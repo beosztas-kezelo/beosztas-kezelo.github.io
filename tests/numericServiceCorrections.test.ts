@@ -89,13 +89,13 @@ describe('számos szolgálati formázások célzott korrekciója', () => {
     });
   });
 
-  it('a közvetlen kék 12 ICS- és Google-leírása 6-os kocsit tartalmaz', async () => {
+  it('a közvetlen kék 12 megtartja az időpontját, exportleírása üres', async () => {
     const calendarEvent = interpretSchedule([
       entry(5, 1, '12', { fontColor: '#0000FF' }),
     ], {}).events[0];
     if (!calendarEvent) throw new Error('Hiányzó kék 12 tesztesemény.');
 
-    expect(buildIcs([calendarEvent])).toContain('Szolgálati jelleg: 6-os kocsi');
+    expect(buildIcs([calendarEvent])).not.toContain('DESCRIPTION:');
 
     let body: unknown;
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
@@ -104,7 +104,7 @@ describe('számos szolgálati formázások célzott korrekciója', () => {
       return Promise.resolve(response({ id: 'blue-12', colorId: '10' }));
     });
     await new GoogleCalendarClient('token', fetcher).insertEvent('primary', calendarEvent);
-    expect(body).toMatchObject({ description: 'Szolgálati jelleg: 6-os kocsi' });
+    expect(body).toMatchObject({ description: '' });
   });
 
   it.each([

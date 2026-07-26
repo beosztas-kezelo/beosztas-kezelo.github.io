@@ -187,7 +187,3 @@ export function attachCrewMatches(
     }),
   };
 }
-
-export function crewOverlapLabel(overlap: EventTimeRange): string {
-  return `${overlap.start.slice(11, 16)}–${overlap.end.slice(11, 16)}`;
-}
