@@ -59,6 +59,23 @@ async function whiteTwelveWorkbook(): Promise<Buffer> {
   return Buffer.from(content);
 }
 
+async function roleCrewWorkbook(
+  employeeName: string,
+  fontColor: 'FF000000' | 'FFFF0000',
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Augusztus');
+  sheet.getCell('B2').value = '2026. augusztus';
+  sheet.getCell('B4').value = 'Név';
+  for (let day = 1; day <= 31; day += 1) sheet.getCell(4, 3 + (day - 1) * 2).value = day;
+  sheet.getCell('B5').value = employeeName;
+  sheet.getCell('B6').value = 'Összesen';
+  sheet.getCell('C5').value = 12;
+  sheet.getCell('C5').font = { color: { argb: fontColor } };
+  const content = await workbook.xlsx.writeBuffer();
+  return Buffer.from(content);
+}
+
 function processScheduleButton(page: Page) {
   return page.getByRole('button', { name: 'Beosztás feldolgozása' });
 }
@@ -335,6 +352,39 @@ test('mobilnézetben az oldal vízszintes túlcsordulás nélkül megjelenik', a
   expect(stepperOverflow.scrollWidth).toBeGreaterThanOrEqual(stepperOverflow.clientWidth);
 });
 
+test('a szolgálati társlista mobilon lenyitható és használható marad', async ({ page }) => {
+  await page.goto('.');
+  await page.getByTestId('file-input').setInputFiles({
+    name: 'vezetoi.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: await roleCrewWorkbook('Vezető Vince', 'FFFF0000'),
+  });
+  await page.getByTestId('file-input-nurse').setInputFiles({
+    name: 'apoloi.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: await roleCrewWorkbook('Ápoló Anna', 'FFFF0000'),
+  });
+  await page.getByTestId('file-input-officer').setInputFiles({
+    name: 'tiszti.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: await roleCrewWorkbook('Tiszt Tímea', 'FF000000'),
+  });
+  await page.getByLabel('Dolgozó').selectOption('vezető vince');
+  await page.getByRole('checkbox', { name: /Szolgálati társak keresése/ }).check();
+  await processScheduleButton(page).click();
+
+  const table = page.getByRole('table');
+  await expect(table.getByRole('columnheader', { name: 'Szolgálati társak' })).toBeVisible();
+  await table.getByText('2 társ').click();
+  await expect(table.getByText('Ápoló Anna – 07:00–19:00')).toBeVisible();
+  await expect(table.getByText('Tiszt Tímea – 07:00–19:00')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+    )
+    .toBe(true);
+});
+
 test('a folyamatjelző görgetéskor sticky marad, az állapota változatlan, és a felgörgető gomb visszavisz a tetejére', async ({
   page,
 }) => {
@@ -533,7 +583,9 @@ test('az új beosztás feldolgozása nullázza az Excel-folyamatot, felgörget �
   );
   await newScheduleButton.click();
 
-  await expect(page.getByRole('heading', { name: 'Excel-fájl kiválasztása' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Excel-beosztások kiválasztása' }),
+  ).toBeVisible();
   await expect(page.getByText(/Kiválasztva:/u)).not.toBeVisible();
   await expect(page.getByLabel('Hónap')).not.toBeVisible();
   await expect(page.getByLabel('Dolgozó')).not.toBeVisible();

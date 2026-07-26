@@ -11,6 +11,7 @@ export type AppErrorCode =
   | 'NO_EMPLOYEE'
   | 'EMPLOYEE_NOT_FOUND'
   | 'EMPLOYEE_DUPLICATE'
+  | 'DUPLICATE_ROLE_FILE'
   | 'INVALID_DAY_COUNT'
   | 'GOOGLE_NOT_CONFIGURED'
   | 'GOOGLE_ACCESS_DENIED'
@@ -32,6 +33,8 @@ const MESSAGES: Record<AppErrorCode, string> = {
   NO_EMPLOYEE: 'A kiválasztott havi munkalapon nem található dolgozó.',
   EMPLOYEE_NOT_FOUND: 'A kiválasztott dolgozó nem található a havi munkalapon.',
   EMPLOYEE_DUPLICATE: 'A kiválasztott név több sorban is szerepel; kézi döntés szükséges.',
+  DUPLICATE_ROLE_FILE:
+    'Ugyanaz az Excel-fájl nem használható egyszerre több munkakör beosztásaként.',
   INVALID_DAY_COUNT: 'A munkalap a hónaphoz nem tartozó naptári napot is tartalmaz.',
   GOOGLE_NOT_CONFIGURED: 'A Google Naptár-integráció nincs konfigurálva.',
   GOOGLE_ACCESS_DENIED: 'A Google-hozzáférés nem engedélyezett.',

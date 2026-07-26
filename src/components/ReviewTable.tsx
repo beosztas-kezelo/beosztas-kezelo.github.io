@@ -1,5 +1,7 @@
 import type { Ref } from 'react';
 import type { GoogleEventState, ReviewRow } from '../domain/types';
+import { STAFF_ROLE_LABELS, STAFF_ROLES } from '../domain/staffRoles';
+import { crewOverlapLabel } from '../services/crewMatching';
 import { formatHungarianDate, weekdayHungarian } from '../services/dates';
 import { isGoogleSelectionLocked } from '../utils/googleUpload';
 
@@ -8,6 +10,7 @@ interface ReviewTableProps {
   rows: ReviewRow[];
   selected: Set<string>;
   googleStates: ReadonlyMap<string, GoogleEventState>;
+  crewSearchEnabled?: boolean;
   onToggle: (eventId: string) => void;
   onSelectAll: (selected: boolean) => void;
 }
@@ -21,6 +24,7 @@ export function ReviewTable({
   rows,
   selected,
   googleStates,
+  crewSearchEnabled = false,
   onToggle,
   onSelectAll,
 }: ReviewTableProps) {
@@ -66,6 +70,7 @@ export function ReviewTable({
               <th scope="col">Naptáresemény neve</th>
               <th scope="col">Állapot</th>
               <th scope="col">Ellenőrzési megjegyzés</th>
+              {crewSearchEnabled && <th scope="col">Szolgálati társak</th>}
             </tr>
           </thead>
           <tbody>
@@ -262,6 +267,48 @@ export function ReviewTable({
                       ))}
                     </details>
                   </td>
+                  {crewSearchEnabled && (
+                    <td data-label="Szolgálati társak" className="crew-cell">
+                      {row.crewMatches && row.crewMatches.length > 0 ? (
+                        <details className="crew-details">
+                          <summary>{row.crewMatches.length} társ</summary>
+                          {STAFF_ROLES.map((role) => {
+                            const matches = row.crewMatches?.filter(
+                              (match) => match.role === role,
+                            );
+                            if (!matches || matches.length === 0) return null;
+                            return (
+                              <div className="crew-role-group" key={role}>
+                                <strong>{STAFF_ROLE_LABELS[role]}</strong>
+                                <ul>
+                                  {matches.map((match) => (
+                                    <li
+                                      key={`${match.role}-${match.normalizedName}-${match.employeeRow}-${match.overlap.start}-${match.overlap.end}`}
+                                    >
+                                      {match.displayName} – {crewOverlapLabel(match.overlap)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            );
+                          })}
+                        </details>
+                      ) : row.event ? (
+                        <span className="muted">Nincs talált társ.</span>
+                      ) : (
+                        '—'
+                      )}
+                      {row.crewNotices && row.crewNotices.length > 0 && (
+                        <ul className="crew-notices">
+                          {row.crewNotices.map((notice, index) => (
+                            <li key={`${notice.role}-${notice.kind}-${index}`}>
+                              {notice.message}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </td>
+                  )}
                 </tr>
               );
             })}

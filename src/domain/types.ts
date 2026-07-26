@@ -86,6 +86,21 @@ export interface WorkbookSession {
   warnings: string[];
 }
 
+export type StaffRole = 'driver' | 'nurse' | 'officer';
+
+export interface FileFingerprint {
+  name: string;
+  size: number;
+  lastModified: number;
+  sha256: string;
+}
+
+export interface RoleWorkbookSession {
+  role: StaffRole;
+  session: WorkbookSession;
+  fingerprint: FileFingerprint;
+}
+
 export type EntryKind = 'empty' | 'single' | 'double' | 'invalid-date';
 
 export interface DayEntry {
@@ -181,6 +196,50 @@ export interface CalendarEvent {
   timeZone: 'Europe/Budapest';
   inference?: ServiceInference;
   specialKind?: 'previous-month-carryover-partial';
+  crewSearchPerformed?: boolean;
+  crewMembers?: CrewMemberMatch[];
+}
+
+export interface InterpretedEmployeeSchedule {
+  role: StaffRole;
+  employeeName: string;
+  normalizedName: string;
+  employeeRow: number;
+  showRowIdentifier: boolean;
+  result: ScheduleResult;
+}
+
+export interface CrewMemberMatch {
+  role: StaffRole;
+  employeeName: string;
+  normalizedName: string;
+  employeeRow: number;
+  displayName: string;
+  serviceCategory: ServiceCategory;
+  overlap: EventTimeRange;
+}
+
+export type CrewNoticeKind =
+  | 'missing-file'
+  | 'missing-month'
+  | 'no-match'
+  | 'multiple-matches';
+
+export interface CrewMatchNotice {
+  role: StaffRole;
+  kind: CrewNoticeKind;
+  message: string;
+}
+
+export interface CrewRoleSource {
+  role: StaffRole;
+  status: 'available' | 'missing-file' | 'missing-month';
+  employees: InterpretedEmployeeSchedule[];
+}
+
+export interface CrewMatchResult {
+  matchesByEventId: ReadonlyMap<string, CrewMemberMatch[]>;
+  noticesByEventId: ReadonlyMap<string, CrewMatchNotice[]>;
 }
 
 export type ReviewStatus =
@@ -231,6 +290,8 @@ export interface ReviewRow {
   }>;
   dailyInference?: DailyInferenceTechnicalDetails;
   serviceResolution?: ServiceResolutionTechnicalDetails;
+  crewMatches?: CrewMemberMatch[];
+  crewNotices?: CrewMatchNotice[];
   technicalNote?: string;
   diagnostics: CellDiagnostic[];
   event?: CalendarEvent;

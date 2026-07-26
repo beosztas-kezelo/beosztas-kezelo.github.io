@@ -13,6 +13,7 @@ import type {
   ServiceInference,
   ServiceResolutionTechnicalDetails,
   ShiftType,
+  StaffRole,
 } from '../domain/types';
 import { isBlack, isBlue, isGreen, isRed } from '../excel/colors';
 import { normalizeMarker } from '../utils/normalize';
@@ -85,17 +86,27 @@ function hasDefaultBlackFont(style: ResolvedStyle | undefined): boolean {
 
 type StartingServiceKind = 'party' | 'emergency' | 'unknown';
 
-function classifyStartingService(style: ResolvedStyle | undefined): StartingServiceKind {
+function classifyStartingService(
+  style: ResolvedStyle | undefined,
+  role: StaffRole = 'driver',
+): StartingServiceKind {
   if (!style) return 'unknown';
   if (isRed(style.fontColor)) return 'emergency';
-  if (hasDefaultBlackFont(style)) return 'party';
+  if (hasDefaultBlackFont(style)) return role === 'officer' ? 'emergency' : 'party';
   return 'unknown';
 }
 
 export type TwelveKind = 'party' | 'emergency' | 'blue' | 'tenCar' | 'unknown';
 
-export function classifyTwelve(style: ResolvedStyle | undefined): TwelveKind {
+export function classifyTwelve(
+  style: ResolvedStyle | undefined,
+  role: StaffRole = 'driver',
+): TwelveKind {
   if (!style) return 'unknown';
+  if (role === 'officer') {
+    if (isRed(style.fontColor) || hasDefaultBlackFont(style)) return 'emergency';
+    return 'unknown';
+  }
   if (isGreen(style.fontColor)) return 'tenCar';
   if (isBlue(style.fontColor)) return 'blue';
   if (isRed(style.fontColor)) return 'emergency';
@@ -247,8 +258,9 @@ interface ResolvedStartingService {
 function resolveStartingService(
   occurrence: MarkerOccurrence,
   dailyServicePatterns?: ReadonlyMap<string, DailyServicePattern>,
+  role: StaffRole = 'driver',
 ): ResolvedStartingService {
-  const directKind = classifyStartingService(occurrence.diagnostic);
+  const directKind = classifyStartingService(occurrence.diagnostic, role);
   if (directKind !== 'unknown') {
     return {
       serviceCategory:
@@ -257,7 +269,9 @@ function resolveStartingService(
   }
 
   const correction =
-    occurrence.normalizedMarker === '17' && isGreen(occurrence.diagnostic.fontColor)
+    role !== 'officer' &&
+    occurrence.normalizedMarker === '17' &&
+    isGreen(occurrence.diagnostic.fontColor)
       ? dailyServicePatterns
           ?.get(localDateKey(occurrence.entry.date))
           ?.seventeenCorrection
@@ -410,6 +424,7 @@ function assumedMonthEndShift(
 
 function previousMonthCarryoverPartial(
   closingOccurrence: MarkerOccurrence,
+  role: StaffRole,
 ): PairedShift | undefined {
   const { date } = closingOccurrence.entry;
   if (
@@ -419,7 +434,7 @@ function previousMonthCarryoverPartial(
   ) {
     return undefined;
   }
-  const resolvedService = classifyStartingService(closingOccurrence.diagnostic);
+  const resolvedService = classifyStartingService(closingOccurrence.diagnostic, role);
   const serviceCategory =
     resolvedService === 'party'
       ? ('Parti szolgálat' as const)
@@ -452,11 +467,12 @@ export interface InterpretOptions {
   previous?: DayEntry;
   next?: DayEntry;
   dailyServicePatterns?: ReadonlyMap<string, DailyServicePattern>;
+  role?: StaffRole;
 }
 
 export function interpretSchedule(
   entries: DayEntry[],
-  { previous, next, dailyServicePatterns }: InterpretOptions,
+  { previous, next, dailyServicePatterns, role = 'driver' }: InterpretOptions,
 ): ScheduleResult {
   const rows: ReviewRow[] = [];
   const events: CalendarEvent[] = [];
@@ -466,7 +482,7 @@ export function interpretSchedule(
     const marker = occurrence.normalizedMarker;
     const following = entries[index + 1] ?? next;
     const closing = following ? findMarker(following, '7') : undefined;
-    const resolvedService = resolveStartingService(occurrence, dailyServicePatterns);
+    const resolvedService = resolveStartingService(occurrence, dailyServicePatterns, role);
     const mayAssumeBoundary =
       !closing &&
       isLastCalendarDay(entry) &&
@@ -498,9 +514,11 @@ export function interpretSchedule(
         issueRow(
           entry,
           'Bizonytalan',
-          unresolvedGreenSeventeen
-            ? 'A zöld 17 formázási hiba, de az adott napi szolgálati összeállításból a szolgálati jelleg nem következtethető biztosan.'
-            : `A kezdő ${marker} betűszíne nem sorolható Parti vagy Esetszolgálathoz.`,
+          role === 'officer'
+            ? `A ${marker} betűszíne vagy formázása a mentőtiszti munkakörben nem támogatott; a szolgálati jelleg nem állapítható meg biztosan.`
+            : unresolvedGreenSeventeen
+              ? 'A zöld 17 formázási hiba, de az adott napi szolgálati összeállításból a szolgálati jelleg nem következtethető biztosan.'
+              : `A kezdő ${marker} betűszíne nem sorolható Parti vagy Esetszolgálathoz.`,
           {
             timeRule: paired.timeRule,
             pairingReferences: closing
@@ -569,13 +587,13 @@ export function interpretSchedule(
     const preceding = index > 0 ? entries[index - 1] : previous;
     const start = preceding ? findStartingMarker(preceding) : undefined;
     const resolvedService = start
-      ? resolveStartingService(start, dailyServicePatterns)
+      ? resolveStartingService(start, dailyServicePatterns, role)
       : undefined;
     const paired =
       start && resolvedService
         ? pairedShift(start, occurrence, resolvedService)
         : !preceding
-          ? previousMonthCarryoverPartial(occurrence)
+          ? previousMonthCarryoverPartial(occurrence, role)
           : undefined;
 
     if (!paired) {
@@ -595,7 +613,9 @@ export function interpretSchedule(
         issueRow(
           entry,
           'Bizonytalan',
-          start
+          role === 'officer'
+            ? 'A lezáró 7 vagy a hozzá tartozó kezdő jelölés formázása a mentőtiszti munkakörben nem támogatott.'
+            : start
             ? `A kezdő ${start.normalizedMarker} betűszíne nem sorolható Parti vagy Esetszolgálathoz.`
             : 'A január 1-jei 7 betűszíne nem sorolható Parti vagy Esetszolgálathoz.',
           {
@@ -702,9 +722,10 @@ export function interpretSchedule(
       const marker = occurrence.normalizedMarker;
 
       if (marker === '12') {
-        const twelveKind = classifyTwelve(occurrence.diagnostic);
+        const twelveKind = classifyTwelve(occurrence.diagnostic, role);
         const dailyPattern = dailyServicePatterns?.get(localDateKey(entry.date));
         const inferredCorrection =
+          role !== 'officer' &&
           twelveKind === 'party' &&
           dailyPattern?.correction?.candidateAddress === occurrence.diagnostic.address
             ? dailyPattern.correction
@@ -750,7 +771,10 @@ export function interpretSchedule(
                         serviceCategory: 'Esetszolgálat' as const,
                         start: '07:00',
                         end: '19:00',
-                        note: 'Piros 12 felismerve: Esetszolgálat.',
+                        note:
+                          role === 'officer'
+                            ? 'Mentőtiszti 12 felismerve: Esetszolgálat.'
+                            : 'Piros 12 felismerve: Esetszolgálat.',
                       }
                     : twelveKind === 'party'
                       ? {
@@ -767,7 +791,9 @@ export function interpretSchedule(
             issueRow(
               entry,
               'Bizonytalan',
-              'A 12 betűszíne és aláhúzása nem sorolható megbízhatóan támogatott szolgálathoz.',
+              role === 'officer'
+                ? 'A 12 betűszíne vagy formázása a mentőtiszti munkakörben nem támogatott.'
+                : 'A 12 betűszíne és aláhúzása nem sorolható megbízhatóan támogatott szolgálathoz.',
             ),
           );
           continue;
@@ -839,6 +865,16 @@ export function interpretSchedule(
       }
 
       if (marker === 'kmr') {
+        if (role === 'officer') {
+          rows.push(
+            issueRow(
+              entry,
+              'Bizonytalan',
+              'A KMR jelölés a mentőtiszti munkakörben nem támogatott.',
+            ),
+          );
+          continue;
+        }
         const created = event(
           'KMR',
           'KMR',

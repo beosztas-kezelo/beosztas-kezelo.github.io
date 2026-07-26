@@ -2,6 +2,7 @@ import type {
   DailyServicePattern,
   LocalDate,
   ReviewRow,
+  StaffRole,
 } from '../domain/types';
 import type { EmployeeScheduleEntries } from '../excel/dayEntries';
 import { isGreen } from '../excel/colors';
@@ -41,6 +42,7 @@ function markerAddress(row: ReviewRow, marker: string): string | undefined {
 
 export function buildDailyServicePatterns(
   schedules: EmployeeScheduleEntries[],
+  role: StaffRole = 'driver',
 ): ReadonlyMap<string, DailyServicePattern> {
   const daily = new Map<string, DailyAccumulator>();
   for (const schedule of schedules) {
@@ -67,6 +69,7 @@ export function buildDailyServicePatterns(
     const result = interpretSchedule(schedule.current, {
       previous: schedule.previous,
       next: schedule.next,
+      role,
     });
     for (const row of result.rows) {
       const accumulator = daily.get(localDateKey(row.date));
@@ -89,7 +92,7 @@ export function buildDailyServicePatterns(
         const diagnostic = address
           ? row.diagnostics.find((item) => item.address === address)
           : undefined;
-        const kind = classifyTwelve(diagnostic);
+        const kind = classifyTwelve(diagnostic, role);
         if (address && row.status === 'Exportálható') {
           if (kind === 'blue') accumulator.blueTwelveAddresses.add(address);
           else if (kind === 'tenCar') accumulator.tenCarTwelveAddresses.add(address);
@@ -132,6 +135,7 @@ export function buildDailyServicePatterns(
         accumulator.greenSeventeenCandidateAddresses.size;
       const candidateAddress = [...accumulator.blackTwelveCandidateAddresses][0];
       const safeBase =
+        role !== 'officer' &&
         accumulator.partyTwentyFourHourCount === 1 &&
         accumulator.conflictingServiceMarkerCount === 0 &&
         blackTwelveCandidateCount === 1 &&
@@ -155,6 +159,7 @@ export function buildDailyServicePatterns(
       const greenSeventeenAddress =
         [...accumulator.greenSeventeenCandidateAddresses][0];
       const seventeenCorrection =
+        role !== 'officer' &&
         greenSeventeenCandidateCount === 1 &&
         accumulator.conflictingSeventeenCount === 1 &&
         greenSeventeenAddress !== undefined &&
@@ -166,7 +171,8 @@ export function buildDailyServicePatterns(
               explanation:
                 'A zöld 17 formázási hibaként lett felismerve. Az adott napon Esetszolgálat már szerepelt, Parti szolgálat viszont hiányzott, ezért a jelölés Parti 24 órás szolgálatként lett értelmezve.',
             }
-          : greenSeventeenCandidateCount === 1 &&
+          : role !== 'officer' &&
+              greenSeventeenCandidateCount === 1 &&
               accumulator.conflictingSeventeenCount === 1 &&
               greenSeventeenAddress !== undefined &&
               accumulator.partyTwentyFourHourCount === 1 &&

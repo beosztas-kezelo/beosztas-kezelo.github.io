@@ -1,46 +1,82 @@
 import { useMemo, useRef, useState } from 'react';
-import type { GoogleEventState, ScheduleResult, WorkbookSession } from './domain/types';
-import { AppError, toAppError } from './domain/errors';
 import {
-  readEmployeeScheduleEntries,
-  readWorksheetScheduleEntries,
-} from './excel/dayEntries';
-import { buildDailyServicePatterns } from './services/dailyServiceInference';
+  STAFF_ROLE_LABELS,
+  STAFF_ROLES,
+  partnerRolesFor,
+} from './domain/staffRoles';
+import type {
+  FileFingerprint,
+  GoogleEventState,
+  RoleWorkbookSession,
+  ScheduleResult,
+  StaffRole,
+  WorkbookSession,
+} from './domain/types';
+import { AppError, toAppError } from './domain/errors';
+import { createFileFingerprint, fileFingerprintsMatch } from './services/fileIdentity';
 import { buildIcs, downloadIcs, icsFileName } from './services/ics';
 import type { GoogleWriteResult } from './services/googleCalendar';
-import { interpretSchedule } from './services/shifts';
+import {
+  findRoleMonth,
+  interpretSelectedEmployee,
+  interpretWorksheetEmployees,
+} from './services/scheduleInterpretation';
+import { attachCrewMatches, matchCrewMembers } from './services/crewMatching';
 import { monthOptionLabel, monthOptionValue } from './utils/monthOptions';
 import { isGoogleSelectionLocked, isGoogleUploadComplete } from './utils/googleUpload';
 import { deriveWorkflowProgress, type WorkflowStepId } from './utils/workflowProgress';
 import { BackToTopButton } from './components/BackToTopButton';
 import { ErrorNotice } from './components/ErrorNotice';
-import { FileUpload } from './components/FileUpload';
+import { FileUpload, type RoleFileView } from './components/FileUpload';
 import { GooglePanel } from './components/GooglePanel';
 import { ReviewTable } from './components/ReviewTable';
 import { Stepper } from './components/Stepper';
 import { SummaryCards } from './components/SummaryCards';
 import './styles.css';
 
+interface RoleFileState extends RoleFileView {
+  session?: WorkbookSession;
+  fingerprint?: FileFingerprint;
+  error?: AppError;
+}
+
+function emptyRoleFile(role: StaffRole): RoleFileState {
+  return { role, status: 'empty' };
+}
+
+function initialRoleFiles(): Record<StaffRole, RoleFileState> {
+  return {
+    driver: emptyRoleFile('driver'),
+    nurse: emptyRoleFile('nurse'),
+    officer: emptyRoleFile('officer'),
+  };
+}
+
 export default function App() {
   const uploadSectionRef = useRef<HTMLElement>(null);
   const selectionSectionRef = useRef<HTMLElement>(null);
   const reviewSectionRef = useRef<HTMLElement>(null);
   const exportSectionRef = useRef<HTMLElement>(null);
-  const [session, setSession] = useState<WorkbookSession>();
+  const [roleFiles, setRoleFiles] =
+    useState<Record<StaffRole, RoleFileState>>(initialRoleFiles);
+  const [selectedRole, setSelectedRole] = useState<StaffRole>();
   const [selectedMonthKey, setSelectedMonthKey] = useState('');
   const [employeeName, setEmployeeName] = useState('');
   const [employeeRow, setEmployeeRow] = useState<number>();
+  const [crewSearchEnabled, setCrewSearchEnabled] = useState(false);
   const [result, setResult] = useState<ScheduleResult>();
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(new Set());
   const [error, setError] = useState<AppError>();
   const [notice, setNotice] = useState('');
-  const [busy, setBusy] = useState(false);
   const [googleEventStates, setGoogleEventStates] = useState<Map<string, GoogleEventState>>(
     new Map(),
   );
   const [googleUploadResetKey, setGoogleUploadResetKey] = useState(0);
   const [icsExported, setIcsExported] = useState(false);
 
+  const availableRoles = STAFF_ROLES.filter((role) => roleFiles[role].session);
+  const selectedRoleFile = selectedRole ? roleFiles[selectedRole] : undefined;
+  const session = selectedRoleFile?.session;
   const selectedMonth = session?.months.find(
     (month) => monthOptionValue(month) === selectedMonthKey,
   );
@@ -67,8 +103,25 @@ export default function App() {
   const googleUploadFailed = [...googleEventStates.values()].some(
     (state) => state.status === 'Sikertelen',
   );
+  const busy = STAFF_ROLES.some((role) => roleFiles[role].status === 'loading');
+  const supplementalMonthWarnings =
+    selectedRole && selectedMonth
+      ? STAFF_ROLES.filter(
+          (role) =>
+            role !== selectedRole &&
+            roleFiles[role].session &&
+            !findRoleMonth(
+              roleFiles[role].session,
+              selectedMonth.year,
+              selectedMonth.month,
+            ),
+        ).map(
+          (role) =>
+            `${STAFF_ROLE_LABELS[role]}: a ${selectedMonth.year}. ${selectedMonth.month}. havi munkalap nem található.`,
+        )
+      : [];
   const workflowSteps = deriveWorkflowProgress({
-    fileLoaded: Boolean(session),
+    fileLoaded: availableRoles.length > 0,
     monthSelected: Boolean(selectedMonth),
     employeeSelected: employeeSelectionComplete,
     resultReady: Boolean(result),
@@ -79,81 +132,179 @@ export default function App() {
     icsExported,
     errorCode: error?.code,
   });
+
   const resetGoogleUpload = () => {
     setGoogleEventStates(new Map());
     setGoogleUploadResetKey((current) => current + 1);
   };
 
-  const resetAfterFile = () => {
-    setEmployeeName('');
-    setEmployeeRow(undefined);
+  const resetProcessing = () => {
     setResult(undefined);
     setSelectedEvents(new Set());
-    setNotice('');
     setError(undefined);
     setIcsExported(false);
     resetGoogleUpload();
   };
 
-  const handleFile = async (file: File) => {
-    resetAfterFile();
-    setSession(undefined);
-    setSelectedMonthKey('');
-    setBusy(true);
+  const resetEmployeeAndProcessing = () => {
+    setEmployeeName('');
+    setEmployeeRow(undefined);
+    resetProcessing();
+  };
+
+  const selectDefaultMonth = async (nextSession: WorkbookSession) => {
+    const { chooseDefaultMonth } = await import('./excel/workbookParser');
+    const defaultSelection = chooseDefaultMonth(nextSession.months);
+    setSelectedMonthKey(monthOptionValue(defaultSelection.month));
+    setNotice(
+      defaultSelection.usedFallback
+        ? 'A következő naptári hónap nem található; az első kitöltött havi lapot választottuk ki.'
+        : '',
+    );
+  };
+
+  const handleRoleFile = async (role: StaffRole, file: File) => {
+    resetProcessing();
+    setRoleFiles((current) => ({
+      ...current,
+      [role]: {
+        role,
+        status: 'loading',
+        fileName: file.name,
+      },
+    }));
+    if (selectedRole === role) {
+      setSelectedMonthKey('');
+      setEmployeeName('');
+      setEmployeeRow(undefined);
+    }
+
     try {
-      const { chooseDefaultMonth, parseWorkbook } = await import('./excel/workbookParser');
-      const parsed = await parseWorkbook(await file.arrayBuffer(), file.name);
-      const defaultSelection = chooseDefaultMonth(parsed.months);
-      setSession(parsed);
-      setSelectedMonthKey(monthOptionValue(defaultSelection.month));
-      if (defaultSelection.usedFallback) {
-        setNotice(
-          'A következő naptári hónap nem található; az első kitöltött havi lapot választottuk ki.',
+      const buffer = await file.arrayBuffer();
+      const fingerprint = await createFileFingerprint(file, buffer);
+      const duplicateRole = STAFF_ROLES.find(
+        (candidateRole) =>
+          candidateRole !== role &&
+          roleFiles[candidateRole].fingerprint &&
+          fileFingerprintsMatch(
+            fingerprint,
+            roleFiles[candidateRole].fingerprint,
+          ),
+      );
+      if (duplicateRole) {
+        throw new AppError(
+          'DUPLICATE_ROLE_FILE',
+          `A fájl már a(z) ${STAFF_ROLE_LABELS[duplicateRole]} munkakörnél szerepel.`,
         );
       }
+      const { parseWorkbook } = await import('./excel/workbookParser');
+      const parsed = await parseWorkbook(buffer, file.name);
+      const roleSession: RoleWorkbookSession = { role, session: parsed, fingerprint };
+      setRoleFiles((current) => ({
+        ...current,
+        [role]: {
+          role,
+          status: 'success',
+          fileName: parsed.fileName,
+          monthCount: parsed.months.length,
+          session: roleSession.session,
+          fingerprint: roleSession.fingerprint,
+        },
+      }));
+      if (!selectedRole || selectedRole === role) {
+        setSelectedRole(role);
+        resetEmployeeAndProcessing();
+        await selectDefaultMonth(parsed);
+      }
     } catch (caught) {
-      setError(toAppError(caught));
-    } finally {
-      setBusy(false);
+      const appError = toAppError(caught);
+      const hasOtherSuccessfulRole = STAFF_ROLES.some(
+        (candidateRole) =>
+          candidateRole !== role && roleFiles[candidateRole].session !== undefined,
+      );
+      setRoleFiles((current) => ({
+        ...current,
+        [role]: {
+          role,
+          status: 'error',
+          fileName: file.name,
+          error: appError,
+          errorMessage: hasOtherSuccessfulRole ? appError.message : undefined,
+        },
+      }));
+      const fallbackRole = STAFF_ROLES.find(
+        (candidateRole) => candidateRole !== role && roleFiles[candidateRole].session,
+      );
+      if (selectedRole === role) {
+        if (fallbackRole) {
+          const fallbackSession = roleFiles[fallbackRole].session;
+          setSelectedRole(fallbackRole);
+          resetEmployeeAndProcessing();
+          if (fallbackSession) await selectDefaultMonth(fallbackSession);
+        } else {
+          setSelectedRole(undefined);
+          setSelectedMonthKey('');
+          setError(appError);
+        }
+      } else if (availableRoles.length === 0) {
+        setError(appError);
+      }
     }
+  };
+
+  const removeRoleFile = (role: StaffRole) => {
+    const nextFiles = { ...roleFiles, [role]: emptyRoleFile(role) };
+    setRoleFiles(nextFiles);
+    resetProcessing();
+    if (selectedRole !== role) return;
+    const fallbackRole = STAFF_ROLES.find((candidateRole) => nextFiles[candidateRole].session);
+    setSelectedRole(fallbackRole);
+    setSelectedMonthKey('');
+    setEmployeeName('');
+    setEmployeeRow(undefined);
+    setNotice('');
+    if (fallbackRole) {
+      const fallbackSession = nextFiles[fallbackRole].session;
+      if (fallbackSession) void selectDefaultMonth(fallbackSession);
+    }
+  };
+
+  const selectRole = (role: StaffRole) => {
+    const nextSession = roleFiles[role].session;
+    if (!nextSession || role === selectedRole) return;
+    setSelectedRole(role);
+    setSelectedMonthKey('');
+    resetEmployeeAndProcessing();
+    void selectDefaultMonth(nextSession);
   };
 
   const selectMonth = (value: string) => {
     setSelectedMonthKey(value);
-    setEmployeeName('');
-    setEmployeeRow(undefined);
-    setResult(undefined);
-    setSelectedEvents(new Set());
-    setError(undefined);
-    setIcsExported(false);
-    resetGoogleUpload();
+    resetEmployeeAndProcessing();
   };
 
   const selectEmployee = (value: string) => {
     setEmployeeName(value);
     const nextEmployee = selectedMonth?.employees.find((item) => item.normalizedName === value);
     setEmployeeRow(nextEmployee?.rows.length === 1 ? nextEmployee.rows[0] : undefined);
-    setResult(undefined);
-    setSelectedEvents(new Set());
-    setError(undefined);
-    setIcsExported(false);
-    resetGoogleUpload();
+    resetProcessing();
   };
 
   const selectEmployeeRow = (row: number | undefined) => {
     setEmployeeRow(row);
-    setResult(undefined);
-    setSelectedEvents(new Set());
-    setError(undefined);
-    setIcsExported(false);
-    resetGoogleUpload();
+    resetProcessing();
+  };
+
+  const toggleCrewSearch = (enabled: boolean) => {
+    setCrewSearchEnabled(enabled);
+    resetProcessing();
   };
 
   const processSchedule = () => {
     setError(undefined);
     setIcsExported(false);
     resetGoogleUpload();
-    if (!session || !selectedMonth || !employeeName) {
+    if (!session || !selectedRole || !selectedMonth || !employeeName) {
       setError(new AppError('EMPLOYEE_NOT_FOUND'));
       return;
     }
@@ -164,21 +315,43 @@ export default function App() {
       return;
     }
     try {
-      const entries = readEmployeeScheduleEntries(
+      const primary = interpretSelectedEmployee(
         session,
         selectedMonth,
+        selectedRole,
         employeeName,
         employeeRow,
       );
-      const dailyServicePatterns = buildDailyServicePatterns(
-        readWorksheetScheduleEntries(session, selectedMonth),
-      );
-      const interpreted = interpretSchedule(entries.current, {
-        legend: selectedMonth.legendStyles,
-        previous: entries.previous,
-        next: entries.next,
-        dailyServicePatterns,
-      });
+      let interpreted = primary.result;
+      if (crewSearchEnabled) {
+        const sources = partnerRolesFor(selectedRole).map((role) => {
+          const supplementalSession = roleFiles[role].session;
+          if (!supplementalSession) {
+            return { role, status: 'missing-file' as const, employees: [] };
+          }
+          const supplementalMonth = findRoleMonth(
+            supplementalSession,
+            selectedMonth.year,
+            selectedMonth.month,
+          );
+          if (!supplementalMonth) {
+            return { role, status: 'missing-month' as const, employees: [] };
+          }
+          return {
+            role,
+            status: 'available' as const,
+            employees: interpretWorksheetEmployees(
+              supplementalSession,
+              supplementalMonth,
+              role,
+            ),
+          };
+        });
+        interpreted = attachCrewMatches(
+          interpreted,
+          matchCrewMembers(primary, sources),
+        );
+      }
       setResult(interpreted);
       setSelectedEvents(new Set(interpreted.events.map((event) => event.id)));
     } catch (caught) {
@@ -255,15 +428,16 @@ export default function App() {
   };
 
   const startNewSchedule = () => {
-    setSession(undefined);
+    setRoleFiles(initialRoleFiles());
+    setSelectedRole(undefined);
     setSelectedMonthKey('');
     setEmployeeName('');
     setEmployeeRow(undefined);
+    setCrewSearchEnabled(false);
     setResult(undefined);
     setSelectedEvents(new Set());
     setError(undefined);
     setNotice('');
-    setBusy(false);
     setIcsExported(false);
     resetGoogleUpload();
     uploadSectionRef.current?.scrollIntoView?.({
@@ -305,28 +479,19 @@ export default function App() {
         <Stepper steps={workflowSteps} onNavigate={navigateWorkflow} />
         <FileUpload
           sectionRef={uploadSectionRef}
-          fileName={session?.fileName}
+          files={roleFiles}
           disabled={busy}
-          onFile={(file) => void handleFile(file)}
+          onFile={(role, file) => void handleRoleFile(role, file)}
+          onRemove={removeRoleFile}
         />
-        {busy && (
-          <div className="notice neutral" role="status">
-            A munkafüzet feldolgozása…
-          </div>
-        )}
         <ErrorNotice error={error} />
         {notice && (
           <div className="notice warning" role="status">
             {notice}
           </div>
         )}
-        {session?.warnings.map((warning) => (
-          <div className="notice warning" key={warning}>
-            {warning}
-          </div>
-        ))}
 
-        {session && (
+        {availableRoles.length > 0 && (
           <section
             ref={selectionSectionRef}
             className="panel workflow-section"
@@ -338,12 +503,25 @@ export default function App() {
             </div>
             <div className="form-grid">
               <label>
+                Kinek a beosztását szeretnéd feldolgozni?
+                <select
+                  value={selectedRole ?? ''}
+                  onChange={(event) => selectRole(event.target.value as StaffRole)}
+                >
+                  {availableRoles.map((role) => (
+                    <option key={role} value={role}>
+                      {STAFF_ROLE_LABELS[role]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Hónap
                 <select
                   value={selectedMonthKey}
                   onChange={(event) => selectMonth(event.target.value)}
                 >
-                  {session.months.map((month) => (
+                  {session?.months.map((month) => (
                     <option key={monthOptionValue(month)} value={monthOptionValue(month)}>
                       {monthOptionLabel(month)}
                     </option>
@@ -381,11 +559,32 @@ export default function App() {
                 </label>
               )}
             </div>
+            <label className="crew-search-toggle">
+              <input
+                type="checkbox"
+                checked={crewSearchEnabled}
+                onChange={(event) => toggleCrewSearch(event.target.checked)}
+              />
+              <span>
+                <strong>Szolgálati társak keresése</strong>
+                <small>A többi feltöltött munkaköri beosztás alapján.</small>
+              </span>
+            </label>
             {selectedMonth && selectedMonth.warnings.length > 0 && (
               <div className="notice warning">
                 <strong>Forrásadat-ellenőrzés</strong>
                 <ul>
                   {selectedMonth.warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {supplementalMonthWarnings.length > 0 && (
+              <div className="notice warning">
+                <strong>Kiegészítő beosztások</strong>
+                <ul>
+                  {supplementalMonthWarnings.map((warning) => (
                     <li key={warning}>{warning}</li>
                   ))}
                 </ul>
@@ -413,6 +612,7 @@ export default function App() {
               rows={result.rows}
               selected={selectedEvents}
               googleStates={googleEventStates}
+              crewSearchEnabled={crewSearchEnabled}
               onToggle={toggleEvent}
               onSelectAll={selectAll}
             />

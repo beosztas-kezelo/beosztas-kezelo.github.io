@@ -251,36 +251,66 @@ main {
   scroll-margin-top: var(--sticky-stepper-offset);
 }
 
-.drop-zone {
-  border: 1.5px dashed #9cb9aa;
-  background: #f8fbf9;
-  border-radius: 0.9rem;
-  padding: 2rem 1rem;
-  text-align: center;
-  transition: 0.2s ease;
+.role-file-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
 }
-.drop-zone.is-dragging {
+.role-file-card {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: #f8fbf9;
+}
+.role-file-card.is-dragging {
   border-color: var(--green-700);
   background: var(--green-100);
-  transform: scale(1.005);
 }
-.drop-zone p {
+.role-file-card h3 {
+  min-height: 2.6rem;
+  margin: 0 0 0.65rem;
+  color: var(--green-950);
+  font-size: 1rem;
+}
+.role-file-card p {
   margin: 0.35rem 0;
+  overflow-wrap: anywhere;
 }
-.upload-icon {
-  margin: 0 auto 0.8rem;
-  width: 3rem;
-  height: 3rem;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--green-100);
-  color: var(--green-800);
-  font-size: 1.7rem;
+.role-file-drop-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
 }
-.selected-file {
-  margin-top: 1rem !important;
+.role-file-success {
+  border-color: #acd3bb;
+  background: #f1f9f4;
+}
+.role-file-error {
+  border-color: #ecc2bf;
+  background: var(--error-bg);
+}
+.role-file-status {
+  min-height: 4.1rem;
+}
+.status-inline {
+  font-size: 0.82rem;
+}
+.status-inline.success {
   color: var(--green-800);
+}
+.status-inline.error {
+  color: var(--error);
+}
+.role-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.8rem;
+}
+.role-file-actions .button {
+  margin-top: 0;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.82rem;
 }
 .privacy-note {
   display: flex;
@@ -335,6 +365,16 @@ main {
 .button.tertiary:hover {
   color: var(--green-950);
   background: var(--line);
+  border-color: var(--green-700);
+}
+.button.tertiary-outline {
+  color: var(--green-800);
+  background: transparent;
+  border-color: #b9c9c0;
+}
+.button.tertiary-outline:hover {
+  color: var(--green-950);
+  background: var(--green-100);
   border-color: var(--green-700);
 }
 .external-link-icon {
@@ -400,6 +440,25 @@ select {
   background: white;
   color: #1e2e27;
   padding: 0.75rem;
+}
+.crew-search-toggle {
+  display: flex;
+  grid-template-columns: auto 1fr;
+  align-items: flex-start;
+  width: fit-content;
+  margin: 0 0 1.2rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: #f8fbf9;
+}
+.crew-search-toggle span {
+  display: grid;
+  gap: 0.15rem;
+}
+.crew-search-toggle small {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .summary-grid {
@@ -527,6 +586,29 @@ tbody tr:last-child td {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.crew-cell {
+  min-width: 16rem;
+}
+.crew-details summary {
+  cursor: pointer;
+  color: var(--green-800);
+  font-weight: 800;
+}
+.crew-role-group {
+  margin-top: 0.65rem;
+}
+.crew-role-group ul,
+.crew-notices {
+  margin: 0.35rem 0 0;
+  padding-left: 1.15rem;
+}
+.crew-role-group li {
+  margin: 0.25rem 0;
+}
+.crew-notices {
+  color: var(--warning);
+  font-size: 0.78rem;
+}
 .export-panel {
   background: var(--cream);
 }
@@ -649,6 +731,13 @@ footer {
 }
 
 @media (max-width: 850px) {
+  .role-file-grid {
+    grid-template-columns: 1fr;
+  }
+  .role-file-card h3,
+  .role-file-status {
+    min-height: 0;
+  }
   .summary-grid {
     grid-template-columns: repeat(3, 1fr);
   }
@@ -744,6 +833,9 @@ footer {
   }
   td:last-child {
     border-bottom: 0;
+  }
+  .crew-cell {
+    min-width: 0;
   }
 }
 

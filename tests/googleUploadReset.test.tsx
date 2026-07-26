@@ -2,7 +2,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
-import { asFile, workbookBuffer } from './fixtures/syntheticWorkbook';
+import {
+  asFile,
+  roleWorkbookBuffer,
+  workbookBuffer,
+} from './fixtures/syntheticWorkbook';
 
 vi.mock('../src/components/GooglePanel', async () => {
   const { useEffect, useState } = await import('react');
@@ -113,6 +117,65 @@ describe('Google feltöltési eredmény visszaállítása', () => {
 
     expect(screen.queryByText('Sikeres naptárfeltöltés')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Tesztfeltöltés befejezése' })).toBeVisible();
+  });
+
+  it('fő munkakör váltásakor törli a feltöltési eredményt, de megőrzi a Google-bejelentkezést', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.upload(
+      screen.getByTestId('file-input'),
+      asFile(
+        await roleWorkbookBuffer({ employeeName: 'Vezető Vince' }),
+        'vezető.xlsx',
+      ),
+    );
+    await screen.findByText('vezető.xlsx');
+    await user.upload(
+      screen.getByTestId('file-input-nurse'),
+      asFile(
+        await roleWorkbookBuffer({ employeeName: 'Ápoló Anna' }),
+        'ápoló.xlsx',
+      ),
+    );
+    await screen.findByText('ápoló.xlsx');
+    await user.selectOptions(screen.getByLabelText('Dolgozó'), 'vezető vince');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    await user.click(await screen.findByRole('button', { name: 'Teszt Google-bejelentkezés' }));
+    await user.click(await screen.findByRole('button', { name: 'Tesztfeltöltés befejezése' }));
+
+    await user.selectOptions(
+      screen.getByLabelText('Kinek a beosztását szeretnéd feldolgozni?'),
+      'nurse',
+    );
+    expect(screen.queryByText('Sikeres naptárfeltöltés')).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Dolgozó'), 'ápoló anna');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    expect(await screen.findByRole('button', { name: 'Tesztfeltöltés befejezése' })).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Teszt Google-bejelentkezés' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('kiegészítő fájl cseréje törli az eredményt, de nem a Google-bejelentkezést', async () => {
+    const user = userEvent.setup();
+    await prepareProcessedSchedule(user);
+
+    await user.upload(
+      screen.getByTestId('file-input-nurse'),
+      asFile(
+        await roleWorkbookBuffer({ employeeName: 'Ápoló Anna' }),
+        'ápolói-kiegészítő.xlsx',
+      ),
+    );
+    await screen.findByText('ápolói-kiegészítő.xlsx');
+    expect(screen.queryByText('Sikeres naptárfeltöltés')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    expect(await screen.findByRole('button', { name: 'Tesztfeltöltés befejezése' })).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Teszt Google-bejelentkezés' }),
+    ).not.toBeInTheDocument();
   });
 
   it('egyszerű kijelölésmódosításkor megőrzi az eredményt', async () => {

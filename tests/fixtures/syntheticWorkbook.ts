@@ -99,6 +99,41 @@ export async function dailyInferenceWorkbookBuffer(
   return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
 }
 
+export interface RoleWorkbookOptions {
+  employeeName: string;
+  sheetName?: string;
+  year?: number;
+  monthName?: string;
+  marker?: string | number;
+  fontColor?: string;
+}
+
+export async function roleWorkbookBuffer({
+  employeeName,
+  sheetName = 'Augusztus',
+  year = 2026,
+  monthName = 'augusztus',
+  marker = 12,
+  fontColor = '#000000',
+}: RoleWorkbookOptions): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(sheetName);
+  sheet.getCell('B2').value = `${year}. ${monthName}`;
+  sheet.getCell('B4').value = 'Név';
+  for (let day = 1; day <= 31; day += 1) {
+    sheet.getCell(4, 3 + (day - 1) * 2).value = day;
+  }
+  sheet.getCell('B5').value = employeeName;
+  sheet.getCell('B7').value = 'Összesen:';
+  sheet.getCell('C5').value = marker;
+  sheet.getCell('C5').font = {
+    color: { argb: `FF${fontColor.replace('#', '').slice(-6).toUpperCase()}` },
+  };
+
+  const result = new Uint8Array(await workbook.xlsx.writeBuffer());
+  return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
+}
+
 export function asFile(buffer: ArrayBuffer, name = 'anonim-minta.xlsx'): File {
   const file = new File([buffer], name, {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

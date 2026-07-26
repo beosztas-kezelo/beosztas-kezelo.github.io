@@ -28,6 +28,7 @@ const FILE_ERROR_CODES = new Set<AppErrorCode>([
   'LEGACY_XLS',
   'CORRUPT_WORKBOOK',
   'PROTECTED_WORKBOOK',
+  'DUPLICATE_ROLE_FILE',
 ]);
 
 const MONTH_ERROR_CODES = new Set<AppErrorCode>([
