@@ -72,6 +72,8 @@ describe('szolgálati társak minimális exportleírása', () => {
     expect(description).not.toMatch(
       /Szolgálati társak|Szolgálati jelleg|Beosztás|Felismerés|Technikai/u,
     );
+    expect(description).not.toContain('A mentőtiszti beosztás hiányzik');
+    expect(description).not.toContain('mentőtiszti beosztás nélkül');
   });
 
   it('egy mentőápoló és egy mentőtiszt esetén munkaköri címkéket ír', () => {

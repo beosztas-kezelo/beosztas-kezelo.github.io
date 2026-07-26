@@ -5,6 +5,11 @@ export interface CrewSearchAvailability {
   message: string;
 }
 
+export interface OfficerScheduleState {
+  status: 'empty' | 'loading' | 'success' | 'error';
+  session?: Pick<WorkbookSession, 'months'>;
+}
+
 function monthAvailable(
   session: Pick<WorkbookSession, 'months'>,
   selectedMonth: Pick<MonthSheet, 'year' | 'month'>,
@@ -77,13 +82,14 @@ export function getCrewSearchAvailability(
 }
 
 export function hasUsableOfficerSchedule(
-  officerSession: Pick<WorkbookSession, 'months'> | undefined,
+  officerState: OfficerScheduleState,
   selectedMonth: Pick<MonthSheet, 'year' | 'month'> | undefined,
 ): boolean {
   return Boolean(
-    officerSession &&
-      selectedMonth &&
-      monthAvailable(officerSession, selectedMonth),
+    officerState.status === 'success' &&
+    officerState.session &&
+    selectedMonth &&
+    monthAvailable(officerState.session, selectedMonth),
   );
 }
 

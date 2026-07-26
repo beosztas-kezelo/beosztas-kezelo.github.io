@@ -329,6 +329,100 @@ describe('több munkaköri beosztás felülete', () => {
     expect(within(table).getByText(/Tiszt Tímea – 07:00–19:00/)).toBeVisible();
   });
 
+  it('a tiszti fájl eltávolítása teljesen érvényteleníti a tiszti társakat és újra figyelmeztet', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await uploadRole(user, 'driver', 'Vezető Vince', { fontColor: '#FF0000' });
+    await uploadRole(user, 'nurse', 'Ápoló Anna', { fontColor: '#FF0000' });
+    await uploadRole(user, 'officer', 'Tiszt Tímea');
+    await user.selectOptions(await screen.findByLabelText('Dolgozó'), 'vezető vince');
+    const crewSearch = screen.getByRole('checkbox', {
+      name: /Szolgálati társak keresése/,
+    });
+    await user.click(crewSearch);
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    const table = await screen.findByRole('table');
+    await user.click(within(table).getByText('2 társ'));
+    expect(within(table).getByText(/Tiszt Tímea – 07:00–19:00/)).toBeVisible();
+
+    const officerCard = screen
+      .getByRole('heading', { name: 'Mentőtiszti beosztás' })
+      .closest('article');
+    if (!officerCard) throw new Error('Hiányzó mentőtiszti fájlkártya.');
+    await user.click(within(officerCard).getByRole('button', { name: 'Fájl eltávolítása' }));
+
+    expect(within(officerCard).getByText('Nincs fájl kiválasztva.')).toBeVisible();
+    expect(screen.queryByText('Tiszt Tímea')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Ellenőrzés' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Dolgozó')).toHaveValue('vezető vince');
+    expect(crewSearch).toBeEnabled();
+    expect(crewSearch).toBeChecked();
+    expect(
+      within(screen.getByLabelText('Kinek a beosztását szeretnéd feldolgozni?')).queryByRole(
+        'option',
+        { name: 'Mentőtiszt' },
+      ),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    expect(screen.getByRole('dialog', { name: 'A mentőtiszti beosztás hiányzik' })).toBeVisible();
+  });
+
+  it('nem Esetszolgálatos dolgozónál a tiszti fájl eltávolítása után sem figyelmeztet', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await uploadRole(user, 'driver', 'Vezető Vince');
+    await uploadRole(user, 'nurse', 'Ápoló Anna');
+    await uploadRole(user, 'officer', 'Tiszt Tímea');
+    const officerCard = screen
+      .getByRole('heading', { name: 'Mentőtiszti beosztás' })
+      .closest('article');
+    if (!officerCard) throw new Error('Hiányzó mentőtiszti fájlkártya.');
+    await user.click(within(officerCard).getByRole('button', { name: 'Fájl eltávolítása' }));
+
+    await user.selectOptions(screen.getByLabelText('Dolgozó'), 'vezető vince');
+    const crewSearch = screen.getByRole('checkbox', {
+      name: /Szolgálati társak keresése/,
+    });
+    expect(crewSearch).toBeEnabled();
+    await user.click(crewSearch);
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    expect(
+      screen.queryByRole('dialog', { name: 'A mentőtiszti beosztás hiányzik' }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Ellenőrzés' })).toBeVisible();
+  });
+
+  it('a tiszti fájl feltöltése és eltávolítása törli a korábbi tiszt nélküli jóváhagyást', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await uploadRole(user, 'driver', 'Vezető Vince', { fontColor: '#FF0000' });
+    await uploadRole(user, 'nurse', 'Ápoló Anna', { fontColor: '#FF0000' });
+    await user.selectOptions(await screen.findByLabelText('Dolgozó'), 'vezető vince');
+    await user.click(screen.getByRole('checkbox', { name: /Szolgálati társak keresése/ }));
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    await user.click(screen.getByRole('button', { name: 'Folytatás mentőtiszti beosztás nélkül' }));
+    expect(await screen.findByRole('heading', { name: 'Ellenőrzés' })).toBeVisible();
+
+    await uploadRole(user, 'officer', 'Tiszt Tímea');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'A mentőtiszti beosztás hiányzik' }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Ellenőrzés' })).toBeVisible();
+
+    const officerCard = screen
+      .getByRole('heading', { name: 'Mentőtiszti beosztás' })
+      .closest('article');
+    if (!officerCard) throw new Error('Hiányzó mentőtiszti fájlkártya.');
+    await user.click(within(officerCard).getByRole('button', { name: 'Fájl eltávolítása' }));
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    expect(screen.getByRole('dialog', { name: 'A mentőtiszti beosztás hiányzik' })).toBeVisible();
+  });
+
   it('tiszti fájl feltöltése után figyelmeztetés nélkül újraszámolja a tiszti társlistát', async () => {
     const user = userEvent.setup();
     render(<App />);

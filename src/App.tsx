@@ -128,7 +128,7 @@ export default function App() {
     selectedMonth,
   );
   const crewSearchActive = crewSearchEnabled && crewSearchAvailability.enabled;
-  const officerScheduleUsable = hasUsableOfficerSchedule(roleFiles.officer.session, selectedMonth);
+  const officerScheduleUsable = hasUsableOfficerSchedule(roleFiles.officer, selectedMonth);
   const selectedCalendarEvents = useMemo(
     () =>
       result?.events.filter(

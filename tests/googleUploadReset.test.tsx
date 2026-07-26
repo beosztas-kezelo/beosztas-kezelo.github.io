@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
@@ -171,6 +171,46 @@ describe('Google feltöltési eredmény visszaállítása', () => {
     await screen.findByText('ápolói-kiegészítő.xlsx');
     expect(screen.queryByText('Sikeres naptárfeltöltés')).not.toBeInTheDocument();
 
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    expect(await screen.findByRole('button', { name: 'Tesztfeltöltés befejezése' })).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Teszt Google-bejelentkezés' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('a tiszti kiegészítő fájl eltávolítása törli a feldolgozott és Google-feltöltési eredményt', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.upload(
+      screen.getByTestId('file-input'),
+      asFile(await roleWorkbookBuffer({ employeeName: 'Vezető Vince' }), 'vezető.xlsx'),
+    );
+    await screen.findByText('vezető.xlsx');
+    await user.upload(
+      screen.getByTestId('file-input-nurse'),
+      asFile(await roleWorkbookBuffer({ employeeName: 'Ápoló Anna' }), 'ápoló.xlsx'),
+    );
+    await screen.findByText('ápoló.xlsx');
+    await user.upload(
+      screen.getByTestId('file-input-officer'),
+      asFile(await roleWorkbookBuffer({ employeeName: 'Tiszt Tímea' }), 'tiszt.xlsx'),
+    );
+    await screen.findByText('tiszt.xlsx');
+    await user.selectOptions(screen.getByLabelText('Dolgozó'), 'vezető vince');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+    await user.click(await screen.findByRole('button', { name: 'Teszt Google-bejelentkezés' }));
+    await user.click(await screen.findByRole('button', { name: 'Tesztfeltöltés befejezése' }));
+    expect(await screen.findByText('Sikeres naptárfeltöltés')).toBeVisible();
+
+    const officerCard = screen
+      .getByRole('heading', { name: 'Mentőtiszti beosztás' })
+      .closest('article');
+    if (!officerCard) throw new Error('Hiányzó mentőtiszti fájlkártya.');
+    await user.click(within(officerCard).getByRole('button', { name: 'Fájl eltávolítása' }));
+
+    expect(screen.queryByText('Sikeres naptárfeltöltés')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Ellenőrzés' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Dolgozó')).toHaveValue('vezető vince');
     await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
     expect(await screen.findByRole('button', { name: 'Tesztfeltöltés befejezése' })).toBeVisible();
     expect(

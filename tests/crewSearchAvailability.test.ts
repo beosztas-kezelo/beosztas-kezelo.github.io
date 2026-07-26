@@ -83,9 +83,25 @@ describe('szolgálati társkeresés elérhetősége', () => {
   });
 
   it('a mentőtiszti beosztás csak a megfelelő hónappal használható', () => {
-    expect(hasUsableOfficerSchedule(undefined, august)).toBe(false);
-    expect(hasUsableOfficerSchedule(septemberSession, august)).toBe(false);
-    expect(hasUsableOfficerSchedule(augustSession, august)).toBe(true);
+    expect(hasUsableOfficerSchedule({ status: 'empty' }, august)).toBe(false);
+    expect(hasUsableOfficerSchedule({ status: 'success', session: septemberSession }, august)).toBe(
+      false,
+    );
+    expect(hasUsableOfficerSchedule({ status: 'success', session: augustSession }, august)).toBe(
+      true,
+    );
+  });
+
+  it('eltávolított, betöltés alatt álló vagy hibás tiszti fájlt régi sessionnel sem tekint használhatónak', () => {
+    expect(hasUsableOfficerSchedule({ status: 'empty', session: augustSession }, august)).toBe(
+      false,
+    );
+    expect(hasUsableOfficerSchedule({ status: 'loading', session: augustSession }, august)).toBe(
+      false,
+    );
+    expect(hasUsableOfficerSchedule({ status: 'error', session: augustSession }, august)).toBe(
+      false,
+    );
   });
 
   it('csak bekapcsolt társkeresés, Esetszolgálat és hiányzó tiszti beosztás együtt kér figyelmeztetést', () => {
