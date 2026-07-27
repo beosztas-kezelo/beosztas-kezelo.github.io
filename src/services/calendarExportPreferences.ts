@@ -71,10 +71,12 @@ export function resolveCalendarEventTitle(
   event: CalendarEvent,
   preferences: CalendarExportPreferences,
 ): string {
-  if (preferences.titleMode === 'custom') {
-    return normalizedCustomEventTitle(preferences.customTitle);
-  }
-  return event.summary;
+  const title =
+    preferences.titleMode === 'custom'
+      ? normalizedCustomEventTitle(preferences.customTitle)
+      : event.summary;
+  const suffix = event.roleAssignment?.titleSuffix;
+  return suffix ? `${title} - ${suffix}` : title;
 }
 
 export function selectedGoogleEventColor(

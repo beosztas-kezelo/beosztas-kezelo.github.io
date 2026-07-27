@@ -1,6 +1,7 @@
 import type {
   InterpretedEmployeeSchedule,
   MonthSheet,
+  ScheduleResult,
   StaffRole,
   WorkbookSession,
 } from '../domain/types';
@@ -10,6 +11,45 @@ import {
 } from '../excel/dayEntries';
 import { buildDailyServicePatterns } from './dailyServiceInference';
 import { interpretSchedule } from './shifts';
+
+function stableHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function applyEffectiveRole(result: ScheduleResult, role: StaffRole): ScheduleResult {
+  const eventsByOriginalId = new Map(
+    result.events.map((item) => [
+      item.id,
+      {
+        ...item,
+        id: stableHash(`${item.id}|${role}`),
+        effectiveRole: role,
+      },
+    ]),
+  );
+  const events = [...eventsByOriginalId.values()];
+  return {
+    ...result,
+    events,
+    rows: result.rows.map((row) =>
+      row.event
+        ? {
+            ...row,
+            event: eventsByOriginalId.get(row.event.id) ?? {
+              ...row.event,
+              id: stableHash(`${row.event.id}|${role}`),
+              effectiveRole: role,
+            },
+          }
+        : row,
+    ),
+  };
+}
 
 export function findRoleMonth(
   session: WorkbookSession,
@@ -48,13 +88,16 @@ export function interpretSelectedEmployee(
     normalizedName,
     employeeRow: selectedRow,
     showRowIdentifier: employee.rows.length > 1,
-    result: interpretSchedule(entries.current, {
-      legend: month.legendStyles,
-      previous: entries.previous,
-      next: entries.next,
-      dailyServicePatterns,
+    result: applyEffectiveRole(
+      interpretSchedule(entries.current, {
+        legend: month.legendStyles,
+        previous: entries.previous,
+        next: entries.next,
+        dailyServicePatterns,
+        role,
+      }),
       role,
-    }),
+    ),
   };
 }
 
@@ -79,13 +122,16 @@ export function interpretWorksheetEmployees(
       normalizedName: employee.normalizedName,
       employeeRow: schedule.row,
       showRowIdentifier: employee.rows.length > 1,
-      result: interpretSchedule(schedule.current, {
-        legend: month.legendStyles,
-        previous: schedule.previous,
-        next: schedule.next,
-        dailyServicePatterns,
+      result: applyEffectiveRole(
+        interpretSchedule(schedule.current, {
+          legend: month.legendStyles,
+          previous: schedule.previous,
+          next: schedule.next,
+          dailyServicePatterns,
+          role,
+        }),
         role,
-      }),
+      ),
     };
   });
 }

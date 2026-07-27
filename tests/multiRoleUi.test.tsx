@@ -13,6 +13,7 @@ async function uploadRole(
     sheetName?: string;
     monthName?: string;
     fontColor?: string;
+    marker?: string | number;
     additionalEmployeeNames?: string[];
     additionalMonths?: Array<{
       sheetName: string;
@@ -27,6 +28,7 @@ async function uploadRole(
     sheetName: options.sheetName,
     monthName: options.monthName,
     fontColor: options.fontColor,
+    marker: options.marker,
     additionalEmployeeNames: options.additionalEmployeeNames,
     additionalMonths: options.additionalMonths,
   });
@@ -189,6 +191,61 @@ describe('több munkaköri beosztás felülete', () => {
         name: 'Vezető Vince',
       }),
     ).toBeVisible();
+  });
+
+  it('driver ÁP jelölését az ápolói teljes sorból oldja fel, és a címben is jelzi', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await uploadRole(user, 'driver', 'Kovács Anna', {
+      marker: 'AP',
+      fileName: 'driver-ap.xlsx',
+    });
+    await uploadRole(user, 'nurse', 'Kovács Anna', {
+      marker: 12,
+      fontColor: '#FF0000',
+      fileName: 'nurse-szolgalat.xlsx',
+    });
+    await user.selectOptions(await screen.findByLabelText('Dolgozó'), 'kovács anna');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('ÁP → 12')).toBeVisible();
+    expect(within(table).getByText('ÁP munkakörben')).toBeVisible();
+    expect(within(table).getByText('OMSZ - ÁP')).toBeVisible();
+    expect(
+      table.querySelector('td[data-label="Szolgálati jelleg"]'),
+    ).toHaveTextContent('Esetszolgálat');
+    expect(screen.getByRole('button', { name: 'ICS letöltése' })).toBeEnabled();
+
+    const nurseCard = screen
+      .getByRole('heading', { name: 'Mentőápolói beosztás' })
+      .closest('article');
+    if (!nurseCard) throw new Error('Hiányzó mentőápolói fájlkártya.');
+    await user.click(within(nurseCard).getByRole('button', { name: 'Fájl eltávolítása' }));
+    expect(screen.queryByRole('heading', { name: 'Ellenőrzés' })).not.toBeInTheDocument();
+  });
+
+  it('hiányzó ápolói fájlnál az ÁP napot bizonytalanként megtartja, de nem exportálja', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await uploadRole(user, 'driver', 'Kovács Anna', {
+      marker: 'ÁP',
+      fileName: 'driver-ap.xlsx',
+    });
+    await user.selectOptions(await screen.findByLabelText('Dolgozó'), 'kovács anna');
+    await user.click(screen.getByRole('button', { name: 'Beosztás feldolgozása' }));
+
+    await screen.findByRole('heading', { name: 'Ellenőrzés' });
+    const row = screen.getByRole('table').querySelector<HTMLTableRowElement>('tbody tr');
+    if (!row) throw new Error('Hiányzó ÁP hibasor.');
+    expect(screen.getByRole('button', { name: 'ICS letöltése' })).toBeDisabled();
+    const technicalMessage = row.querySelector<HTMLElement>('.technical-message');
+    expect(technicalMessage).toHaveTextContent(
+      'Az ÁP jelölés feloldásához a mentőápolói beosztás szükséges.',
+    );
+    expect(technicalMessage).not.toBeVisible();
+    await user.click(within(row).getByText('Technikai részletek'));
+    expect(technicalMessage).toBeVisible();
   });
 
   it('eltérő hónapú kötelező fájlnál letiltja a társkeresést és pontos magyarázatot ad', async () => {

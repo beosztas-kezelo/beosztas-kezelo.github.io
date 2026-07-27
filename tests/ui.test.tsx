@@ -135,9 +135,10 @@ describe('felhasználói felület', () => {
     if (!row) throw new Error('Hiányzó következtetett szolgálati sor.');
     expect(within(row).getByText('10:00')).toBeVisible();
     expect(within(row).getByText('22:00')).toBeVisible();
-    expect(within(row).getByText(/hiányzott a 10-es kocsi/)).toBeVisible();
+    expect(within(row).getByText(/hiányzott a 10-es kocsi/)).not.toBeVisible();
 
     await user.click(within(row).getByText('Technikai részletek'));
+    expect(within(row).getByText(/hiányzott a 10-es kocsi/)).toBeVisible();
     expect(within(row).getByText('24 órás Parti szolgálat jelen van')).toBeVisible();
     expect(within(row).getByText('Kék 12 jelen van')).toBeVisible();
     expect(within(row).getByText('Fekete 12 jelöltek száma')).toBeVisible();

@@ -138,15 +138,24 @@ function safelyReadBoundary(
   month: MonthSheet | undefined,
   normalizedName: string,
   edge: 'first' | 'last',
+  rowOverride?: number,
 ): DayEntry | undefined {
   if (!month) return undefined;
   try {
-    const entries = readMonthEntries(session, month, normalizedName).filter(
+    const entries = readMonthEntries(session, month, normalizedName, rowOverride).filter(
       (entry) => entry.group.valid,
     );
     return edge === 'first' ? entries[0] : entries.at(-1);
   } catch {
-    return undefined;
+    if (rowOverride === undefined) return undefined;
+    try {
+      const entries = readMonthEntries(session, month, normalizedName).filter(
+        (entry) => entry.group.valid,
+      );
+      return edge === 'first' ? entries[0] : entries.at(-1);
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -159,8 +168,20 @@ export function readEmployeeScheduleEntries(
   const current = readMonthEntries(session, month, normalizedName, rowOverride);
   const previousMonth = adjacentMonth(session.months, month.year, month.month, -1);
   const nextMonth = adjacentMonth(session.months, month.year, month.month, 1);
-  const previous = safelyReadBoundary(session, previousMonth, normalizedName, 'last');
-  const next = safelyReadBoundary(session, nextMonth, normalizedName, 'first');
+  const previous = safelyReadBoundary(
+    session,
+    previousMonth,
+    normalizedName,
+    'last',
+    rowOverride,
+  );
+  const next = safelyReadBoundary(
+    session,
+    nextMonth,
+    normalizedName,
+    'first',
+    rowOverride,
+  );
   if (previous && localDateKey(previous.date) >= localDateKey(current[0]?.date ?? previous.date))
     return { current, next };
   return { current, previous, next };

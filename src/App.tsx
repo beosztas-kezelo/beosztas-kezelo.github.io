@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { STAFF_ROLE_LABELS, STAFF_ROLES, partnerRolesFor } from './domain/staffRoles';
+import { STAFF_ROLE_LABELS, STAFF_ROLES } from './domain/staffRoles';
 import type {
   CalendarExportPreferences,
   FileFingerprint,
@@ -35,6 +35,7 @@ import {
   interpretWorksheetEmployees,
 } from './services/scheduleInterpretation';
 import { attachCrewMatches, matchCrewMembers } from './services/crewMatching';
+import { resolveDailyRoleAssignments } from './services/roleReassignment';
 import {
   getCrewSearchAvailability,
   hasUsableOfficerSchedule,
@@ -431,7 +432,7 @@ export default function App() {
   ) => {
     let interpreted = primary.result;
     if (crewSearchActive && selectedMonth && selectedRole) {
-      const sources = partnerRolesFor(selectedRole).map((role) => {
+      const sources = STAFF_ROLES.map((role) => {
         const supplementalSession = roleFiles[role].session;
         if (!supplementalSession) {
           return { role, status: 'missing-file' as const, employees: [] };
@@ -474,12 +475,17 @@ export default function App() {
       return;
     }
     try {
-      const primary = interpretSelectedEmployee(
+      const primary = resolveDailyRoleAssignments(
+        interpretSelectedEmployee(
+          session,
+          selectedMonth,
+          selectedRole,
+          employeeName,
+          employeeRow,
+        ),
         session,
         selectedMonth,
-        selectedRole,
-        employeeName,
-        employeeRow,
+        roleFiles,
       );
       const officerScheduleRequired = requiresOfficerScheduleWarning(
         primary.result.events,
@@ -882,6 +888,7 @@ export default function App() {
               rows={result.rows}
               selected={selectedEvents}
               googleStates={googleEventStates}
+              preferences={calendarExportPreferences}
               crewSearchEnabled={crewSearchActive}
               onToggle={toggleEvent}
               onSelectAll={selectAll}

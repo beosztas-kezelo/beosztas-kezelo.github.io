@@ -83,6 +83,23 @@ async function roleCrewWorkbook(
   return Buffer.from(content);
 }
 
+async function roleAssignmentWorkbook(
+  marker: string | number,
+  fontColor = 'FF000000',
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Augusztus');
+  sheet.getCell('B2').value = '2026. augusztus';
+  sheet.getCell('B4').value = 'Név';
+  for (let day = 1; day <= 31; day += 1) sheet.getCell(4, 3 + (day - 1) * 2).value = day;
+  sheet.getCell('B5').value = 'Kovács Anna';
+  sheet.getCell('B6').value = 'Összesen';
+  sheet.getCell('C5').value = marker;
+  sheet.getCell('C5').font = { color: { argb: fontColor } };
+  const content = await workbook.xlsx.writeBuffer();
+  return Buffer.from(content);
+}
+
 function processScheduleButton(page: Page) {
   return page.getByRole('button', { name: 'Beosztás feldolgozása' });
 }
@@ -106,7 +123,9 @@ function visibleShiftType(page: Page, shiftType: string) {
 }
 
 function visibleEventRow(page: Page, eventName: string) {
-  return page.locator('tbody tr').filter({ hasText: eventName });
+  return page.locator('tbody tr').filter({
+    has: page.locator('td[data-label="Esemény"]', { hasText: eventName }),
+  });
 }
 
 function workflowStep(page: Page, stepId: string) {
@@ -232,6 +251,83 @@ test('teljes helyi ICS-folyamat', async ({ page }) => {
   await expect(workflowStep(page, 'export')).toHaveAttribute('data-state', 'complete');
 });
 
+test('az ÁP átirányítás exportja, Google-címe és mobil technikai nézete helyes', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installGoogleIdentity(page);
+  await routeWritableCalendar(page);
+  let eventRequestBody: unknown;
+  await page.route(
+    'https://www.googleapis.com/calendar/v3/calendars/primary/events**',
+    async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ items: [] }),
+        });
+        return;
+      }
+      eventRequestBody = JSON.parse(route.request().postData() ?? 'null') as unknown;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'created-ap', colorId: '10' }),
+      });
+    },
+  );
+
+  await page.goto('.');
+  await page.getByTestId('file-input').setInputFiles({
+    name: 'driver-ap.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: await roleAssignmentWorkbook('AP'),
+  });
+  await page.getByTestId('file-input-nurse').setInputFiles({
+    name: 'nurse-service.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    buffer: await roleAssignmentWorkbook(12, 'FFFF0000'),
+  });
+  await expect(page.getByText('driver-ap.xlsx')).toBeVisible();
+  await expect(page.getByText('nurse-service.xlsx')).toBeVisible();
+  await page
+    .getByLabel('Kinek a beosztását szeretnéd feldolgozni?')
+    .selectOption('driver');
+  await page.getByLabel('Dolgozó').selectOption('kovács anna');
+  await processScheduleButton(page).click();
+
+  const reviewRow = page.locator('tbody tr').filter({ hasText: 'ÁP → 12' });
+  await expect(reviewRow).toContainText('ÁP munkakörben');
+  await expect(reviewRow).toContainText('OMSZ - ÁP');
+  await expect(
+    page.getByRole('columnheader', { name: 'Ellenőrzési megjegyzés' }),
+  ).toHaveCount(0);
+  await reviewRow.getByText('Technikai részletek').click();
+  await expect(reviewRow.getByRole('heading', { name: 'Munkakör-átirányítás' })).toBeVisible();
+  await expect(reviewRow.getByText('Mentőápoló', { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    })),
+  ).toEqual({ clientWidth: 390, scrollWidth: 390 });
+
+  const [download] = await Promise.all([page.waitForEvent('download'), icsButton(page).click()]);
+  const ics = await downloadText(download);
+  expect(ics).toContain('SUMMARY:OMSZ - ÁP');
+  expect(ics).toContain('DTSTART;TZID=Europe/Budapest:20260801T070000');
+  expect(ics).toContain('DTEND;TZID=Europe/Budapest:20260801T190000');
+
+  await page.getByRole('button', { name: 'Google-bejelentkezés' }).click();
+  await googleUploadButton(page, 1).click();
+  await expect(page.getByRole('heading', { name: 'Sikeres naptárfeltöltés' })).toBeVisible();
+  expect(eventRequestBody).toMatchObject({
+    summary: 'OMSZ - ÁP',
+    start: { dateTime: '2026-08-01T07:00:00' },
+    end: { dateTime: '2026-08-01T19:00:00' },
+    colorId: '10',
+  });
+});
+
 test('a 17–7 szolgálat listában 24 órás, ICS-ben és Google-ben 06:59-ig tart', async ({ page }) => {
   await installGoogleIdentity(page);
   await routeWritableCalendar(page);
@@ -336,16 +432,19 @@ test('a kitöltés nélküli 12 a listában, ICS-ben és Google-ben 07:00–19:0
   await expect(serviceRow.locator('td[data-label="Szolgálati jelleg"]')).toHaveText(
     'Parti szolgálat',
   );
-  await expect(serviceRow.getByText('Exportálható', { exact: true })).toBeVisible();
-  await expect(serviceRow.getByText('Fekete 12 felismerve: Parti szolgálat.')).toBeVisible();
+  await expect(serviceRow.locator('.status')).toHaveText('Exportálható');
+  await expect(serviceRow.getByText('Fekete 12 felismerve: Parti szolgálat.')).not.toBeVisible();
   await serviceRow.getByText('Technikai részletek').click();
+  await expect(serviceRow.getByText('Fekete 12 felismerve: Parti szolgálat.')).toBeVisible();
   const selectedDiagnostic = serviceRow.locator('dl').filter({ hasText: 'C5' });
   await expect(selectedDiagnostic.getByText('Van látható kitöltés')).toBeVisible();
   await expect(selectedDiagnostic.locator('dt:has-text("Van látható kitöltés") + dd')).toHaveText(
     'nem',
   );
   await expect(selectedDiagnostic.getByText('Végső fill kategória')).toBeVisible();
-  await expect(selectedDiagnostic.getByText('noFill', { exact: true })).toBeVisible();
+  await expect(
+    selectedDiagnostic.locator('dt:has-text("Végső fill kategória") + dd'),
+  ).toHaveText('noFill');
 
   const [download] = await Promise.all([page.waitForEvent('download'), icsButton(page).click()]);
   const downloadStream = await download.createReadStream();
@@ -626,8 +725,7 @@ test('az eseménycím és a Google-szín testreszabása az ICS-ben, a Google-ké
   await settings.getByRole('button', { name: 'Mentés és használat' }).click();
   await expect(page.getByLabel('Dolgozó')).toHaveValue('teszt elek');
   await expect(page.getByRole('heading', { name: 'Ellenőrzés' })).toBeVisible();
-  await expect(visibleEventRow(page, 'OMSZ')).toHaveCount(1);
-  await expect(visibleEventRow(page, 'KMR')).toHaveCount(1);
+  await expect(visibleEventRow(page, 'Saját mentőszolgálat')).toHaveCount(2);
 
   const [download] = await Promise.all([page.waitForEvent('download'), icsButton(page).click()]);
   const icsContent = await downloadText(download);
@@ -888,7 +986,7 @@ test('OAuth után natív fetch-csel, Bearer tokennel lekéri az írható naptár
   await expect(page.getByRole('link', { name: 'Google Naptár megnyitása' })).not.toBeVisible();
   await expect(page.getByLabel('Írható naptár')).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Másik fiók csatlakoztatása' })).toBeVisible();
-  await expect(visibleReview.getByText('Létrehozva', { exact: true })).toHaveCount(2);
+  await expect(visibleReview.locator('.status', { hasText: 'Létrehozva' })).toHaveCount(2);
 
   await page.getByRole('button', { name: 'Másik fiók csatlakoztatása' }).click();
   await expect(page.getByLabel('Írható naptár')).toHaveValue('primary');

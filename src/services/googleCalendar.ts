@@ -171,7 +171,11 @@ export class GoogleCalendarClient {
       `/calendars/${encodeURIComponent(calendarId)}/events?${query.toString()}`,
       { signal },
     );
-    const acceptedTitles = new Set([resolveCalendarEventTitle(item, preferences), item.summary]);
+    const acceptedTitles = new Set(
+      item.roleAssignment
+        ? [resolveCalendarEventTitle(item, preferences)]
+        : [resolveCalendarEventTitle(item, preferences), item.summary],
+    );
     return (response.items ?? []).some((candidate) => {
       const startValue = candidate.start?.dateTime;
       const endValue = candidate.end?.dateTime;
@@ -217,7 +221,11 @@ export class GoogleCalendarClient {
     );
     const previousDateKey = localDateKey(previousDate);
     const partialDateKey = localDateKey(partialDate);
-    const acceptedTitles = new Set([resolveCalendarEventTitle(item, preferences), item.summary]);
+    const acceptedTitles = new Set(
+      item.roleAssignment
+        ? [resolveCalendarEventTitle(item, preferences)]
+        : [resolveCalendarEventTitle(item, preferences), item.summary],
+    );
 
     return (response.items ?? []).some((candidate) => {
       const startValue = candidate.start?.dateTime;

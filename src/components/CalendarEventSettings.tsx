@@ -62,8 +62,23 @@ export function CalendarEventSettings({
   const selectedColor = selectedGoogleEventColor(colors, preferences.googleColorId);
   const hasOmsz = events.some((event) => event.summary === 'OMSZ');
   const hasKmr = events.some((event) => event.summary === 'KMR');
-  const previewTitle =
-    events.length > 0 ? resolveCalendarEventTitle(events[0] as CalendarEvent, preferences) : '';
+  const previewTitles = [
+    ...new Set(events.map((event) => resolveCalendarEventTitle(event, preferences))),
+  ];
+  const omszPreviewTitles = [
+    ...new Set(
+      events
+        .filter((event) => event.summary === 'OMSZ')
+        .map((event) => resolveCalendarEventTitle(event, preferences)),
+    ),
+  ];
+  const kmrPreviewTitles = [
+    ...new Set(
+      events
+        .filter((event) => event.summary === 'KMR')
+        .map((event) => resolveCalendarEventTitle(event, preferences)),
+    ),
+  ];
   const normalizedDraft = normalizedCustomEventTitle(draftTitle);
   const duplicateTitle = savedCustomTitles.some(
     (title) => title.toLocaleLowerCase('hu-HU') === normalizedDraft.toLocaleLowerCase('hu-HU'),
@@ -322,15 +337,23 @@ export function CalendarEventSettings({
         ) : preferences.titleMode === 'automatic' && hasOmsz && hasKmr ? (
           <div className="preview-titles">
             <p>
-              Normál szolgálat: <strong>OMSZ</strong>
+              Normál szolgálat: <strong>{omszPreviewTitles.join(', ')}</strong>
             </p>
             <p>
-              KMR-szolgálat: <strong>KMR</strong>
+              KMR-szolgálat: <strong>{kmrPreviewTitles.join(', ')}</strong>
             </p>
+          </div>
+        ) : previewTitles.length > 1 ? (
+          <div className="preview-titles">
+            {previewTitles.map((title) => (
+              <p key={title}>
+                <strong>{title}</strong>
+              </p>
+            ))}
           </div>
         ) : (
           <p className="preview-event-title">
-            <strong>{previewTitle}</strong>
+            <strong>{previewTitles[0]}</strong>
           </p>
         )}
         <p className="preview-color">

@@ -400,4 +400,72 @@ describe('szolgálati társak idő- és kategóriaalapú párosítása', () => {
 
     expect(crew.matchesByEventId.get('primary')).toEqual([]);
   });
+
+  it('driverből ÁP-val ápolóként dolgozó eseményhez drivert és Esetszolgálatnál tisztet keres', () => {
+    const redirected = {
+      ...calendarEvent('redirected-ap', 'Esetszolgálat', DAY_START, DAY_END),
+      effectiveRole: 'nurse' as const,
+    };
+    const primary = schedule('driver', 'Közös Név', 5, [redirected]);
+    const crew = matchCrewMembers(primary, [
+      available('driver', [
+        schedule('driver', 'Közös Név', 7, [
+          calendarEvent('self-driver', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+        schedule('driver', 'Váltó Vezető', 9, [
+          calendarEvent('driver-match', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+      ]),
+      available('nurse', [
+        schedule('nurse', 'Másik Ápoló', 11, [
+          calendarEvent('nurse-match', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+      ]),
+      available('officer', [
+        schedule('officer', 'Tiszt Tímea', 13, [
+          calendarEvent('officer-match', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+      ]),
+    ]);
+
+    expect(crew.matchesByEventId.get('redirected-ap')?.map((match) => match.role)).toEqual([
+      'driver',
+      'officer',
+    ]);
+    expect(
+      crew.matchesByEventId
+        .get('redirected-ap')
+        ?.some((match) => match.normalizedName === 'közös név'),
+    ).toBe(false);
+  });
+
+  it('nurse-ből GKV-val driverként dolgozó eseményhez ápolót és Esetszolgálatnál tisztet keres', () => {
+    const redirected = {
+      ...calendarEvent('redirected-gkv', 'Esetszolgálat', DAY_START, DAY_END),
+      effectiveRole: 'driver' as const,
+    };
+    const primary = schedule('nurse', 'Átirányított Anna', 5, [redirected]);
+    const crew = matchCrewMembers(primary, [
+      available('driver', [
+        schedule('driver', 'Másik Vezető', 7, [
+          calendarEvent('driver-match', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+      ]),
+      available('nurse', [
+        schedule('nurse', 'Ápoló Béla', 9, [
+          calendarEvent('nurse-match', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+      ]),
+      available('officer', [
+        schedule('officer', 'Tiszt Tímea', 11, [
+          calendarEvent('officer-match', 'Esetszolgálat', DAY_START, DAY_END),
+        ]),
+      ]),
+    ]);
+
+    expect(crew.matchesByEventId.get('redirected-gkv')?.map((match) => match.role)).toEqual([
+      'nurse',
+      'officer',
+    ]);
+  });
 });

@@ -66,6 +66,7 @@ function renderSettings(
     googleColorId: '10',
   },
   options: {
+    events?: CalendarEvent[];
     savedCustomTitles?: string[];
     paletteWarning?: string;
     persistenceUnavailable?: boolean;
@@ -82,9 +83,9 @@ function renderSettings(
     onReloadColors: vi.fn(),
     onReset: vi.fn(),
   };
-  render(
+  const rendered = render(
     <CalendarEventSettings
-      events={events}
+      events={options.events ?? events}
       preferences={preferences}
       colors={colors}
       savedCustomTitles={options.savedCustomTitles ?? []}
@@ -95,7 +96,7 @@ function renderSettings(
       {...callbacks}
     />,
   );
-  return callbacks;
+  return { ...callbacks, unmount: rendered.unmount };
 }
 
 describe('Naptáresemény beállításai felület', () => {
@@ -105,6 +106,41 @@ describe('Naptáresemény beállításai felület', () => {
     expect(screen.getByRole('heading', { name: 'Naptárban így jelenik meg' })).toBeVisible();
     expect(screen.getByText(/Normál szolgálat:/u)).toHaveTextContent('OMSZ');
     expect(screen.getByText(/KMR-szolgálat:/u)).toHaveTextContent('KMR');
+  });
+
+  it('az ÁP utótagot automatikus és egyéni címnél is megjeleníti az előnézetben', () => {
+    const redirectedEvent: CalendarEvent = {
+      ...(events[0] as CalendarEvent),
+      roleAssignment: {
+        baseRole: 'driver',
+        effectiveRole: 'nurse',
+        marker: 'ÁP',
+        sourceFileName: 'driver.xlsx',
+        sourceRow: 5,
+        sourceCells: ['C5'],
+        targetFileName: 'nurse.xlsx',
+        targetRow: 5,
+        targetCells: ['C5'],
+        targetMarker: '12',
+        targetPairingCells: [],
+        titleSuffix: 'ÁP',
+        resolution: 'resolved',
+        reason: 'Teszt.',
+      },
+    };
+    const { unmount } = renderSettings(undefined, { events: [redirectedEvent] });
+    expect(screen.getByText('OMSZ - ÁP')).toBeVisible();
+    unmount();
+
+    renderSettings(
+      {
+        titleMode: 'custom',
+        customTitle: 'Szolgálat',
+        googleColorId: '10',
+      },
+      { events: [redirectedEvent] },
+    );
+    expect(screen.getByText('Szolgálat - ÁP')).toBeVisible();
   });
 
   it('a választóban nincs külön OMSZ vagy KMR felülírás', () => {

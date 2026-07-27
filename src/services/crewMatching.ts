@@ -19,13 +19,13 @@ const ROLE_ORDER: Record<StaffRole, number> = {
 };
 
 function roleIsRelevant(
-  primaryRole: StaffRole,
+  effectiveRole: StaffRole,
   sourceRole: StaffRole,
   event: CalendarEvent,
 ): boolean {
-  if (primaryRole === 'officer') return sourceRole === 'driver' || sourceRole === 'nurse';
+  if (effectiveRole === 'officer') return sourceRole === 'driver' || sourceRole === 'nurse';
   if (sourceRole === 'officer') return event.serviceCategory === 'Esetszolgálat';
-  return primaryRole !== sourceRole;
+  return effectiveRole !== sourceRole;
 }
 
 export function overlappingRange(
@@ -121,7 +121,8 @@ export function matchCrewMembers(
     const eventMatches: CrewMemberMatch[] = [];
     const eventNotices: CrewMatchNotice[] = [];
     for (const source of sources) {
-      if (!roleIsRelevant(primary.role, source.role, primaryEvent)) continue;
+      const effectiveRole = primaryEvent.effectiveRole ?? primary.role;
+      if (!roleIsRelevant(effectiveRole, source.role, primaryEvent)) continue;
       if (source.status !== 'available') {
         eventNotices.push(missingNotice(source));
         continue;

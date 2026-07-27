@@ -191,8 +191,30 @@ export interface CalendarEvent {
   timeZone: 'Europe/Budapest';
   inference?: ServiceInference;
   specialKind?: 'previous-month-carryover-partial';
+  effectiveRole?: StaffRole;
+  roleAssignment?: RoleAssignmentTechnicalDetails;
   crewSearchPerformed?: boolean;
   crewMembers?: CrewMemberMatch[];
+}
+
+export type RoleAssignmentMarker = 'ÁP' | 'GKV';
+
+export interface RoleAssignmentTechnicalDetails {
+  baseRole: StaffRole;
+  effectiveRole: StaffRole;
+  marker: RoleAssignmentMarker;
+  sourceFileName: string;
+  sourceRow: number;
+  sourceCells: string[];
+  targetFileName?: string;
+  targetRow?: number;
+  targetRows?: number[];
+  targetCells: string[];
+  targetMarker?: string;
+  targetPairingCells: string[];
+  titleSuffix: RoleAssignmentMarker;
+  resolution: 'resolved' | 'unresolved';
+  reason: string;
 }
 
 export type CalendarEventTitleMode = 'automatic' | 'custom';
@@ -296,6 +318,8 @@ export interface ReviewRow {
   }>;
   dailyInference?: DailyInferenceTechnicalDetails;
   serviceResolution?: ServiceResolutionTechnicalDetails;
+  roleAssignment?: RoleAssignmentTechnicalDetails;
+  resolvedMarker?: string;
   crewMatches?: CrewMemberMatch[];
   crewNotices?: CrewMatchNotice[];
   technicalNote?: string;
