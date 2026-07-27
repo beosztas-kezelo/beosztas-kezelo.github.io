@@ -277,8 +277,10 @@ test('az ÁP átirányítás exportja, Google-címe és mobil technikai nézete 
   );
 
   await page.goto('.');
+  const longDriverFileName =
+    'driver-rendkívül-hosszú-fájlnév-amelynek-mobilon-is-olvashatóan-kell-törnie.xlsx';
   await page.getByTestId('file-input').setInputFiles({
-    name: 'driver-ap.xlsx',
+    name: longDriverFileName,
     mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     buffer: await roleAssignmentWorkbook('AP'),
   });
@@ -287,7 +289,7 @@ test('az ÁP átirányítás exportja, Google-címe és mobil technikai nézete 
     mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     buffer: await roleAssignmentWorkbook(12, 'FFFF0000'),
   });
-  await expect(page.getByText('driver-ap.xlsx')).toBeVisible();
+  await expect(page.getByText(longDriverFileName)).toBeVisible();
   await expect(page.getByText('nurse-service.xlsx')).toBeVisible();
   await page
     .getByLabel('Kinek a beosztását szeretnéd feldolgozni?')
@@ -301,9 +303,32 @@ test('az ÁP átirányítás exportja, Google-címe és mobil technikai nézete 
   await expect(
     page.getByRole('columnheader', { name: 'Ellenőrzési megjegyzés' }),
   ).toHaveCount(0);
-  await reviewRow.getByText('Technikai részletek').click();
-  await expect(reviewRow.getByRole('heading', { name: 'Munkakör-átirányítás' })).toBeVisible();
-  await expect(reviewRow.getByText('Mentőápoló', { exact: true })).toBeVisible();
+  await reviewRow.getByRole('button', { name: 'Technikai részletek' }).click();
+  const technicalPanel = page.getByRole('region', { name: /technikai részletei/u });
+  await expect(technicalPanel.getByRole('heading', { name: 'Munkakör-átirányítás' })).toBeVisible();
+  await expect(technicalPanel.getByText('Mentőápoló', { exact: true })).toBeVisible();
+  await expect(technicalPanel.locator('xpath=ancestor::td')).toHaveAttribute('colspan', '10');
+  const mobileDefinitionLayout = await technicalPanel.locator('dl').first().evaluate((list) => {
+    const label = list.querySelector('dt');
+    const value = list.querySelector('dd');
+    if (!label || !value) throw new Error('Hiányzó technikai címke vagy érték.');
+    return {
+      labelTop: label.getBoundingClientRect().top,
+      valueTop: value.getBoundingClientRect().top,
+    };
+  });
+  expect(mobileDefinitionLayout.valueTop).toBeGreaterThan(mobileDefinitionLayout.labelTop);
+  const longFileName = technicalPanel.getByText(`${longDriverFileName}, 5. sor`);
+  await expect(longFileName).toBeVisible();
+  expect(
+    await longFileName.evaluate((value) => {
+      const style = getComputedStyle(value);
+      return {
+        wordBreak: style.wordBreak,
+        overflowWrap: style.overflowWrap,
+      };
+    }),
+  ).toEqual({ wordBreak: 'normal', overflowWrap: 'anywhere' });
   expect(
     await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
@@ -320,6 +345,14 @@ test('az ÁP átirányítás exportja, Google-címe és mobil technikai nézete 
   await page.getByRole('button', { name: 'Google-bejelentkezés' }).click();
   await googleUploadButton(page, 1).click();
   await expect(page.getByRole('heading', { name: 'Sikeres naptárfeltöltés' })).toBeVisible();
+  const apiDetails = technicalPanel.locator('.technical-pre');
+  await expect(apiDetails).toBeVisible();
+  expect(
+    await apiDetails.evaluate((value) => value.scrollWidth <= value.clientWidth + 1),
+  ).toBe(true);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+  ).toBe(true);
   expect(eventRequestBody).toMatchObject({
     summary: 'OMSZ - ÁP',
     start: { dateTime: '2026-08-01T07:00:00' },
@@ -364,9 +397,12 @@ test('a 17–7 szolgálat listában 24 órás, ICS-ben és Google-ben 06:59-ig t
     .filter({ hasText: 'Exportálható' });
   await expect(serviceRow.locator('td[data-label="Kezdés"]')).toHaveText('07:00');
   await expect(serviceRow.locator('td[data-label="Befejezés"]')).toHaveText('07:00');
-  await serviceRow.getByText('Technikai részletek').click();
+  await serviceRow.getByRole('button', { name: 'Technikai részletek' }).click();
+  const technicalPanel = page.getByRole('region', { name: /technikai részletei/u });
   await expect(
-    serviceRow.getByText('A naptáresemény befejezése 06:59 a jobb naptári elkülönítés érdekében.'),
+    technicalPanel.getByText(
+      'A naptáresemény befejezése 06:59 a jobb naptári elkülönítés érdekében.',
+    ),
   ).toBeVisible();
 
   const [download] = await Promise.all([page.waitForEvent('download'), icsButton(page).click()]);
@@ -433,10 +469,13 @@ test('a kitöltés nélküli 12 a listában, ICS-ben és Google-ben 07:00–19:0
     'Parti szolgálat',
   );
   await expect(serviceRow.locator('.status')).toHaveText('Exportálható');
-  await expect(serviceRow.getByText('Fekete 12 felismerve: Parti szolgálat.')).not.toBeVisible();
-  await serviceRow.getByText('Technikai részletek').click();
-  await expect(serviceRow.getByText('Fekete 12 felismerve: Parti szolgálat.')).toBeVisible();
-  const selectedDiagnostic = serviceRow.locator('dl').filter({ hasText: 'C5' });
+  await expect(page.getByText('Fekete 12 felismerve: Parti szolgálat.')).toHaveCount(0);
+  await serviceRow.getByRole('button', { name: 'Technikai részletek' }).click();
+  const technicalPanel = page.getByRole('region', { name: /technikai részletei/u });
+  await expect(
+    technicalPanel.getByText('Fekete 12 felismerve: Parti szolgálat.'),
+  ).toBeVisible();
+  const selectedDiagnostic = technicalPanel.locator('dl').filter({ hasText: 'C5' });
   await expect(selectedDiagnostic.getByText('Van látható kitöltés')).toBeVisible();
   await expect(selectedDiagnostic.locator('dt:has-text("Van látható kitöltés") + dd')).toHaveText(
     'nem',
@@ -746,6 +785,14 @@ test('az eseménycím és a Google-szín testreszabása az ICS-ben, a Google-ké
       },
     });
   }
+  const createdRows = page.locator('.review-main-row').filter({ hasText: 'Létrehozva' });
+  await expect(createdRows).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    await createdRows
+      .nth(index)
+      .getByRole('button', { name: 'Technikai részletek' })
+      .click();
+  }
   await expect(page.locator('.table-scroll').getByText(/Kék színnel létrehozta/u)).toHaveCount(2);
 });
 
@@ -952,6 +999,14 @@ test('OAuth után natív fetch-csel, Bearer tokennel lekéri az írható naptár
       ]),
     );
   const visibleReview = page.locator('.table-scroll');
+  const createdRows = visibleReview.locator('.review-main-row').filter({ hasText: 'Létrehozva' });
+  await expect(createdRows).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    await createdRows
+      .nth(index)
+      .getByRole('button', { name: 'Technikai részletek' })
+      .click();
+  }
   await expect(visibleReview.getByText(/Sötétzöld színnel létrehozta/u)).toHaveCount(2);
   await expect(page.getByRole('heading', { name: 'Sikeres naptárfeltöltés' })).toBeVisible();
   await expect(workflowStep(page, 'export')).toHaveAttribute('data-state', 'complete');

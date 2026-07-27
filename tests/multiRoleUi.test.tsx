@@ -239,13 +239,11 @@ describe('több munkaköri beosztás felülete', () => {
     const row = screen.getByRole('table').querySelector<HTMLTableRowElement>('tbody tr');
     if (!row) throw new Error('Hiányzó ÁP hibasor.');
     expect(screen.getByRole('button', { name: 'ICS letöltése' })).toBeDisabled();
-    const technicalMessage = row.querySelector<HTMLElement>('.technical-message');
-    expect(technicalMessage).toHaveTextContent(
-      'Az ÁP jelölés feloldásához a mentőápolói beosztás szükséges.',
-    );
-    expect(technicalMessage).not.toBeVisible();
-    await user.click(within(row).getByText('Technikai részletek'));
-    expect(technicalMessage).toBeVisible();
+    const technicalMessage =
+      'Az ÁP jelölés feloldásához a mentőápolói beosztás szükséges.';
+    expect(screen.queryByText(technicalMessage)).not.toBeInTheDocument();
+    await user.click(within(row).getByRole('button', { name: 'Technikai részletek' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(technicalMessage);
   });
 
   it('eltérő hónapú kötelező fájlnál letiltja a társkeresést és pontos magyarázatot ad', async () => {

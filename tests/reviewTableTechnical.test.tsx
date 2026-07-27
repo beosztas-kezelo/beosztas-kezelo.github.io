@@ -5,15 +5,16 @@ import { ReviewTable } from '../src/components/ReviewTable';
 import type { CrewMemberMatch, GoogleEventState, ReviewRow } from '../src/domain/types';
 
 function crewMatch(
-  displayName: string,
+  employeeName: string,
   employeeRow: number,
   start: string,
   end: string,
+  displayName = employeeName,
 ): CrewMemberMatch {
   return {
     role: 'nurse',
-    employeeName: displayName,
-    normalizedName: displayName.toLocaleLowerCase('hu-HU'),
+    employeeName,
+    normalizedName: employeeName.toLocaleLowerCase('hu-HU'),
     employeeRow,
     displayName,
     serviceCategory: 'Esetszolgálat',
@@ -103,19 +104,35 @@ describe('érintett számos jelölések technikai részletei', () => {
     const tableRow = screen.getByText('Parti szolgálat – következtetett').closest('tr');
     if (!tableRow) throw new Error('Hiányzó technikai tesztsor.');
     expect(
-      within(tableRow).getByText('Átfedő előző havi teljes esemény található: igen.'),
-    ).toBeInTheDocument();
-    await user.click(within(tableRow).getByText('Technikai részletek'));
-    expect(within(tableRow).getByText('Eredeti szolgálati kategória')).toBeVisible();
-    expect(within(tableRow).getByText('Nem meghatározható')).toBeVisible();
-    expect(within(tableRow).getByText('Formázási korrekció történt')).toBeVisible();
-    expect(within(tableRow).getByText('Napi összeállításból következtetve')).toBeVisible();
-    expect(within(tableRow).getByText('Feltételezett hónaphatár-párosítás')).toBeVisible();
-    expect(within(tableRow).getByText('feltételezett következő havi 7')).toBeVisible();
-    expect(within(tableRow).getByText('C5 (merge master: C5)')).toBeVisible();
-    expect(within(tableRow).getByText('argb=FF008000')).toBeVisible();
-    expect(within(tableRow).getByText('#008000')).toBeVisible();
-    expect(within(tableRow).getByText('2026-08-31T07:00:00 – 2026-09-01T06:59:00')).toBeVisible();
+      screen.queryByText('Átfedő előző havi teljes esemény található: igen.'),
+    ).not.toBeInTheDocument();
+    const toggle = within(tableRow).getByRole('button', { name: 'Technikai részletek' });
+    const panelId = toggle.getAttribute('aria-controls');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(panelId).toBeTruthy();
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const panel = panelId ? document.getElementById(panelId) : null;
+    if (!panel) throw new Error('Hiányzó teljes szélességű technikai panel.');
+    const detailsRow = panel.closest('tr');
+    const detailsCell = panel.closest('td');
+    expect(detailsRow).toBe(tableRow.nextElementSibling);
+    expect(detailsRow).toHaveClass('review-details-row');
+    expect(detailsCell).toHaveAttribute('colspan', '10');
+    expect(within(panel).getByText('Eredeti szolgálati kategória')).toBeVisible();
+    expect(within(panel).getByText('Nem meghatározható')).toBeVisible();
+    expect(within(panel).getByText('Formázási korrekció történt')).toBeVisible();
+    expect(within(panel).getByText('Napi összeállításból következtetve')).toBeVisible();
+    expect(within(panel).getByText('Feltételezett hónaphatár-párosítás')).toBeVisible();
+    expect(within(panel).getByText('feltételezett következő havi 7')).toBeVisible();
+    expect(within(panel).getByText('C5 (merge master: C5)')).toBeVisible();
+    expect(within(panel).getByText('argb=FF008000')).toBeVisible();
+    expect(within(panel).getByText('#008000')).toBeVisible();
+    expect(
+      within(panel).getByText('2026-08-31T07:00:00 – 2026-09-01T06:59:00'),
+    ).toBeVisible();
   });
 
   it('a webes társlistában 07:00-ként jeleníti meg a tényleges 06:59-es befejezést', async () => {
@@ -147,8 +164,21 @@ describe('érintett számos jelölések technikai részletei', () => {
       diagnostics: [],
       event,
       crewMatches: [
-        crewMatch('Nappalos Ápoló', 7, '2026-08-10T07:00:00', '2026-08-10T19:00:00'),
+        crewMatch(
+          'Nappalos Ápoló',
+          7,
+          '2026-08-10T07:00:00',
+          '2026-08-10T19:00:00',
+          'Nappalos Ápoló (7. sor)',
+        ),
         crewMatch('Éjszakás Ápoló', 9, '2026-08-10T19:00:00', '2026-08-11T06:59:00'),
+      ],
+      crewNotices: [
+        {
+          role: 'nurse',
+          kind: 'multiple-matches',
+          message: 'Több lehetséges egyező szolgálati társ található.',
+        },
       ],
     };
 
@@ -167,6 +197,22 @@ describe('érintett számos jelölések technikai részletei', () => {
     expect(screen.getByText('Nappalos Ápoló – 07:00–19:00')).toBeVisible();
     expect(screen.getByText('Éjszakás Ápoló – 19:00–07:00')).toBeVisible();
     expect(screen.queryByText(/19:00–06:59/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nappalos Ápoló \(7\. sor\)/u)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Több lehetséges egyező szolgálati társ található.'),
+    ).not.toBeInTheDocument();
+    expect(row.crewMatches?.[0]?.employeeRow).toBe(7);
+
+    const toggle = screen.getByRole('button', { name: 'Technikai részletek' });
+    await user.click(toggle);
+    const panelId = toggle.getAttribute('aria-controls');
+    const panel = panelId ? document.getElementById(panelId) : null;
+    if (!panel) throw new Error('Hiányzó társas technikai panel.');
+    expect(panel.closest('td')).toHaveAttribute('colspan', '11');
+    expect(within(panel).getByText('Szolgálati társak technikai adatai')).toBeVisible();
+    expect(
+      within(panel).getByText('Több lehetséges egyező szolgálati társ található.'),
+    ).toBeVisible();
   });
 
   it('eltávolítja a megjegyzésoszlopot, és a hosszú magyarázatot csak a strukturált részletekben mutatja', async () => {
@@ -214,8 +260,8 @@ describe('érintett számos jelölések technikai részletei', () => {
     expect(
       screen.queryByRole('columnheader', { name: 'Ellenőrzési megjegyzés' }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(note)).not.toBeVisible();
-    await user.click(screen.getByText('Technikai részletek'));
+    expect(screen.queryByText(note)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Technikai részletek' }));
     expect(screen.getByText(note)).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Felismerés eredménye' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Excel-cellák és formázás' })).toBeVisible();
@@ -300,7 +346,7 @@ describe('érintett számos jelölések technikai részletei', () => {
     expect(screen.getByText('ÁP → 12')).toBeVisible();
     expect(screen.getByText('ÁP munkakörben')).toBeVisible();
     expect(screen.getByText('Szolgálat - ÁP')).toBeVisible();
-    await user.click(screen.getByText('Technikai részletek'));
+    await user.click(screen.getByRole('button', { name: 'Technikai részletek' }));
     expect(screen.getByRole('heading', { name: 'Munkakör-átirányítás' })).toBeVisible();
     expect(screen.getByText('Mentőgépkocsi-vezető / technikus')).toBeVisible();
     expect(screen.getByText('Mentőápoló')).toBeVisible();
@@ -308,5 +354,87 @@ describe('érintett számos jelölések technikai részletei', () => {
     expect(screen.getByText('nurse-rendkívül-hosszú-fájlnév.xlsx')).toBeVisible();
     expect(screen.getByText('RendkívülHosszúGoogleApiTechnikaiÉrtékAmelynekTöbbSorbaKellTörnie'))
       .toHaveClass('technical-pre');
+  });
+
+  it('a hibás sor pontos üzenetét a teljes szélességű részletpanel elején emeli ki', async () => {
+    const user = userEvent.setup();
+    const issueMessage =
+      'Az 5 jelöléshez nem található következő napi 7, ezért a párosítás nem egyértelmű.';
+    const row: ReviewRow = {
+      id: 'issue-row',
+      date: { year: 2026, month: 8, day: 15 },
+      marker: '5',
+      shiftType: 'Éjszakai szolgálat',
+      status: 'Hibás párosítás',
+      note: issueMessage,
+      diagnostics: [],
+    };
+
+    render(
+      <ReviewTable
+        rows={[row]}
+        selected={new Set()}
+        googleStates={new Map()}
+        onToggle={vi.fn()}
+        onSelectAll={vi.fn()}
+      />,
+    );
+
+    const mainRow = screen.getByText('Hibás párosítás').closest('tr');
+    if (!mainRow) throw new Error('Hiányzó hibás fő sor.');
+    expect(within(mainRow).queryByText(issueMessage)).not.toBeInTheDocument();
+    await user.click(within(mainRow).getByRole('button', { name: 'Technikai részletek' }));
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(issueMessage);
+    expect(alert).toHaveClass('technical-issue-message');
+    expect(alert.parentElement?.firstElementChild).toBe(alert);
+    expect(alert.closest('tr')).toHaveClass('review-details-row-issue');
+  });
+
+  it('több technikai panel egyedi azonosítóval, billentyűzettel és egymástól függetlenül nyitható', async () => {
+    const user = userEvent.setup();
+    const rows: ReviewRow[] = [1, 2].map((day) => ({
+      id: `independent-row-${day}`,
+      date: { year: 2026, month: 8, day },
+      marker: '12',
+      shiftType: 'Nappalos 07–19',
+      serviceCategory: 'Parti szolgálat',
+      summary: 'OMSZ',
+      status: 'Exportálható',
+      note: `${day}. sor technikai üzenete.`,
+      diagnostics: [],
+    }));
+
+    render(
+      <ReviewTable
+        rows={rows}
+        selected={new Set()}
+        googleStates={new Map()}
+        onToggle={vi.fn()}
+        onSelectAll={vi.fn()}
+      />,
+    );
+
+    const toggles = screen.getAllByRole('button', { name: 'Technikai részletek' });
+    expect(toggles).toHaveLength(2);
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'false');
+    expect(toggles[0]?.getAttribute('aria-controls')).not.toBe(
+      toggles[1]?.getAttribute('aria-controls'),
+    );
+
+    toggles[0]?.focus();
+    await user.keyboard('{Enter}');
+    await user.click(toggles[1] as HTMLElement);
+
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'true');
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelectorAll('.review-details-row')).toHaveLength(2);
+
+    await user.click(toggles[0] as HTMLElement);
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(toggles[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelectorAll('.review-details-row')).toHaveLength(1);
   });
 });

@@ -70,11 +70,18 @@ describe('felhasználói felület', () => {
       ?.closest('tr');
     if (!twentyFourHourRow) throw new Error('Hiányzó 24 órás szolgálati sor.');
     expect(within(twentyFourHourRow).getAllByText('07:00')).toHaveLength(2);
+    await user.click(
+      within(twentyFourHourRow).getByRole('button', { name: 'Technikai részletek' }),
+    );
+    const twentyFourHourDetails = twentyFourHourRow.nextElementSibling;
+    if (!(twentyFourHourDetails instanceof HTMLTableRowElement)) {
+      throw new Error('Hiányzó 24 órás technikai részletsor.');
+    }
     expect(
-      within(twentyFourHourRow).getByText(
+      within(twentyFourHourDetails).getByText(
         'A naptáresemény befejezése 06:59 a jobb naptári elkülönítés érdekében.',
       ),
-    ).toBeInTheDocument();
+    ).toBeVisible();
     expect(screen.getAllByText('Hibás párosítás').length).toBeGreaterThan(0);
     const exportButton = screen.getByRole('button', { name: 'ICS letöltése' });
     expect(exportButton).toBeEnabled();
@@ -135,16 +142,20 @@ describe('felhasználói felület', () => {
     if (!row) throw new Error('Hiányzó következtetett szolgálati sor.');
     expect(within(row).getByText('10:00')).toBeVisible();
     expect(within(row).getByText('22:00')).toBeVisible();
-    expect(within(row).getByText(/hiányzott a 10-es kocsi/)).not.toBeVisible();
+    expect(screen.queryByText(/hiányzott a 10-es kocsi/)).not.toBeInTheDocument();
 
-    await user.click(within(row).getByText('Technikai részletek'));
-    expect(within(row).getByText(/hiányzott a 10-es kocsi/)).toBeVisible();
-    expect(within(row).getByText('24 órás Parti szolgálat jelen van')).toBeVisible();
-    expect(within(row).getByText('Kék 12 jelen van')).toBeVisible();
-    expect(within(row).getByText('Fekete 12 jelöltek száma')).toBeVisible();
-    expect(within(row).getByText('Következtetett korrekció történt')).toBeVisible();
-    expect(within(row).getByText(/Parti szolgálat, Nappalos 07–19/)).toBeVisible();
-    expect(within(row).getByText(/10-es kocsi, Nappalos 10–22/)).toBeVisible();
+    await user.click(within(row).getByRole('button', { name: 'Technikai részletek' }));
+    const detailsRow = row.nextElementSibling;
+    if (!(detailsRow instanceof HTMLTableRowElement)) {
+      throw new Error('Hiányzó technikai részletsor.');
+    }
+    expect(within(detailsRow).getByText(/hiányzott a 10-es kocsi/)).toBeVisible();
+    expect(within(detailsRow).getByText('24 órás Parti szolgálat jelen van')).toBeVisible();
+    expect(within(detailsRow).getByText('Kék 12 jelen van')).toBeVisible();
+    expect(within(detailsRow).getByText('Fekete 12 jelöltek száma')).toBeVisible();
+    expect(within(detailsRow).getByText('Következtetett korrekció történt')).toBeVisible();
+    expect(within(detailsRow).getByText(/Parti szolgálat, Nappalos 07–19/)).toBeVisible();
+    expect(within(detailsRow).getByText(/10-es kocsi, Nappalos 10–22/)).toBeVisible();
   });
 
   it('teljesített lépésre kattintva a megfelelő valódi szakaszhoz görget', async () => {

@@ -1,4 +1,4 @@
-import { Fragment, type Ref } from 'react';
+import { Fragment, type Ref, useId, useState } from 'react';
 import type {
   CalendarExportPreferences,
   GoogleEventState,
@@ -9,6 +9,7 @@ import {
   createDefaultCalendarExportPreferences,
   resolveCalendarEventTitle,
 } from '../services/calendarExportPreferences';
+import { publicCrewMembers } from '../services/crewDescription';
 import { crewOverlapLabel } from '../services/crewTimeDisplay';
 import { formatHungarianDate, weekdayHungarian } from '../services/dates';
 import { isGoogleSelectionLocked } from '../utils/googleUpload';
@@ -36,23 +37,31 @@ function TechnicalDetails({
   row,
   googleState,
   displayedStatus,
+  issue,
 }: {
   row: ReviewRow;
   googleState?: GoogleEventState;
   displayedStatus: ReviewRow['status'];
+  issue: boolean;
 }) {
   const inferredDiagnostic = row.dailyInference
     ? row.diagnostics.find((diagnostic) => diagnostic.displayedText.trim() === '12')
     : undefined;
   const assignment = row.roleAssignment;
+  const issueMessage =
+    displayedStatus === 'Sikertelen' ? (googleState?.message ?? row.note) : row.note;
 
   return (
-    <details className="diagnostics">
-      <summary>Technikai részletek</summary>
+    <div className="diagnostics">
+      {issue && (
+        <div className="technical-issue-message" role="alert">
+          {issueMessage}
+        </div>
+      )}
       <div className="technical-blocks">
         <section className="technical-block">
           <h4>Felismerés eredménye</h4>
-          <p className="technical-message">{row.note}</p>
+          {!issue && <p className="technical-message">{row.note}</p>}
           {row.technicalNote && row.technicalNote !== row.note && <p>{row.technicalNote}</p>}
           <dl>
             <dt>Állapot</dt>
@@ -263,6 +272,17 @@ function TechnicalDetails({
           )}
         </section>
 
+        {row.crewNotices && row.crewNotices.length > 0 && (
+          <section className="technical-block">
+            <h4>Szolgálati társak technikai adatai</h4>
+            <ul className="crew-notices">
+              {row.crewNotices.map((notice, index) => (
+                <li key={`${notice.role}-${notice.kind}-${index}`}>{notice.message}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {googleState && (
           <section className="technical-block">
             <h4>Google API adatok</h4>
@@ -273,7 +293,7 @@ function TechnicalDetails({
           </section>
         )}
       </div>
-    </details>
+    </div>
   );
 }
 
@@ -287,11 +307,23 @@ export function ReviewTable({
   onToggle,
   onSelectAll,
 }: ReviewTableProps) {
+  const detailsIdPrefix = useId();
+  const [openDetails, setOpenDetails] = useState<ReadonlySet<string>>(() => new Set());
   const exportable = rows.filter(
     (row) => row.event && !isGoogleSelectionLocked(googleStates.get(row.event.id)),
   );
   const allSelected =
     exportable.length > 0 && exportable.every((row) => selected.has(row.event?.id ?? ''));
+  const visibleColumnCount = crewSearchEnabled ? 11 : 10;
+
+  function toggleTechnicalDetails(rowId: string) {
+    setOpenDetails((current) => {
+      const next = new Set(current);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
 
   return (
     <section
@@ -332,121 +364,143 @@ export function ReviewTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, rowIndex) => {
               const eventId = row.event?.id;
               const googleState = eventId ? googleStates.get(eventId) : undefined;
               const displayedStatus = googleState?.status ?? row.status;
+              const publicCrew = publicCrewMembers(row.crewMatches ?? []);
+              const detailsOpen = openDetails.has(row.id);
+              const detailsPanelId = `${detailsIdPrefix}-technical-details-${rowIndex}`;
               const issue =
                 displayedStatus === 'Bizonytalan' ||
                 displayedStatus === 'Hibás párosítás' ||
                 displayedStatus === 'Sikertelen';
               return (
-                <tr
-                  key={row.id}
-                  className={issue ? 'row-issue' : displayedStatus === 'Kizárva' ? 'row-muted' : ''}
-                >
-                  <td data-label="Kijelölés">
-                    <input
-                      type="checkbox"
-                      aria-label={`${formatHungarianDate(row.date)} exportálása`}
-                      checked={eventId ? selected.has(eventId) : false}
-                      disabled={!eventId || isGoogleSelectionLocked(googleState)}
-                      onChange={() => eventId && onToggle(eventId)}
-                    />
-                  </td>
-                  <td data-label="Dátum">{formatHungarianDate(row.date)}</td>
-                  <td data-label="Nap">{weekdayHungarian(row.date)}</td>
-                  <td data-label="Excel-jelölés">
-                    <strong>
-                      {row.roleAssignment?.resolution === 'resolved' && row.resolvedMarker
-                        ? `${row.marker} → ${row.resolvedMarker}`
-                        : row.marker || '—'}
-                    </strong>
-                  </td>
-                  <td data-label="Szolgálat">
-                    {row.shiftType ?? '—'}
-                    {row.roleAssignment?.resolution === 'resolved' && (
-                      <span className="assignment-badge">
-                        {row.roleAssignment.marker} munkakörben
-                      </span>
-                    )}
-                  </td>
-                  <td data-label="Szolgálati jelleg">
-                    {row.serviceCategory
-                      ? `${row.serviceCategory}${
-                          row.dailyInference?.correctionApplied ||
-                          row.serviceResolution?.dailyInferenceApplied
-                            ? ' – következtetett'
-                            : ''
-                        }`
-                      : '—'}
-                  </td>
-                  <td data-label="Kezdés">{time(row.event?.shiftTime.start)}</td>
-                  <td data-label="Befejezés">{time(row.event?.shiftTime.end)}</td>
-                  <td data-label="Esemény">
-                    {row.event ? resolveCalendarEventTitle(row.event, preferences) : '—'}
-                  </td>
-                  <td data-label="Állapot">
-                    <span
-                      className={`status status-${
-                        displayedStatus === 'Létrehozás folyamatban'
-                          ? 'pending'
-                          : issue
-                            ? 'issue'
-                            : 'ok'
-                      }`}
-                    >
-                      {displayedStatus}
-                    </span>
-                    <TechnicalDetails
-                      row={row}
-                      googleState={googleState}
-                      displayedStatus={displayedStatus}
-                    />
-                  </td>
-                  {crewSearchEnabled && (
-                    <td data-label="Szolgálati társak" className="crew-cell">
-                      {row.crewMatches && row.crewMatches.length > 0 ? (
-                        <details className="crew-details">
-                          <summary>{row.crewMatches.length} társ</summary>
-                          {STAFF_ROLES.map((role) => {
-                            const matches = row.crewMatches?.filter(
-                              (match) => match.role === role,
-                            );
-                            if (!matches || matches.length === 0) return null;
-                            return (
-                              <div className="crew-role-group" key={role}>
-                                <strong>{STAFF_ROLE_LABELS[role]}</strong>
-                                <ul>
-                                  {matches.map((match) => (
-                                    <li
-                                      key={`${match.role}-${match.normalizedName}-${match.employeeRow}-${match.overlap.start}-${match.overlap.end}`}
-                                    >
-                                      {match.displayName} – {crewOverlapLabel(match.overlap)}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            );
-                          })}
-                        </details>
-                      ) : row.event ? (
-                        <span className="muted">Nincs talált társ.</span>
-                      ) : (
-                        '—'
-                      )}
-                      {row.crewNotices && row.crewNotices.length > 0 && (
-                        <ul className="crew-notices">
-                          {row.crewNotices.map((notice, index) => (
-                            <li key={`${notice.role}-${notice.kind}-${index}`}>
-                              {notice.message}
-                            </li>
-                          ))}
-                        </ul>
+                <Fragment key={row.id}>
+                  <tr
+                    className={`review-main-row${detailsOpen ? ' details-open' : ''}${
+                      issue
+                        ? ' row-issue'
+                        : displayedStatus === 'Kizárva'
+                          ? ' row-muted'
+                          : ''
+                    }`}
+                  >
+                    <td data-label="Kijelölés">
+                      <input
+                        type="checkbox"
+                        aria-label={`${formatHungarianDate(row.date)} exportálása`}
+                        checked={eventId ? selected.has(eventId) : false}
+                        disabled={!eventId || isGoogleSelectionLocked(googleState)}
+                        onChange={() => eventId && onToggle(eventId)}
+                      />
+                    </td>
+                    <td data-label="Dátum">{formatHungarianDate(row.date)}</td>
+                    <td data-label="Nap">{weekdayHungarian(row.date)}</td>
+                    <td data-label="Excel-jelölés">
+                      <strong>
+                        {row.roleAssignment?.resolution === 'resolved' && row.resolvedMarker
+                          ? `${row.marker} → ${row.resolvedMarker}`
+                          : row.marker || '—'}
+                      </strong>
+                    </td>
+                    <td data-label="Szolgálat">
+                      {row.shiftType ?? '—'}
+                      {row.roleAssignment?.resolution === 'resolved' && (
+                        <span className="assignment-badge">
+                          {row.roleAssignment.marker} munkakörben
+                        </span>
                       )}
                     </td>
+                    <td data-label="Szolgálati jelleg">
+                      {row.serviceCategory
+                        ? `${row.serviceCategory}${
+                            row.dailyInference?.correctionApplied ||
+                            row.serviceResolution?.dailyInferenceApplied
+                              ? ' – következtetett'
+                              : ''
+                          }`
+                        : '—'}
+                    </td>
+                    <td data-label="Kezdés">{time(row.event?.shiftTime.start)}</td>
+                    <td data-label="Befejezés">{time(row.event?.shiftTime.end)}</td>
+                    <td data-label="Esemény">
+                      {row.event ? resolveCalendarEventTitle(row.event, preferences) : '—'}
+                    </td>
+                    <td data-label="Állapot">
+                      <span
+                        className={`status status-${
+                          displayedStatus === 'Létrehozás folyamatban'
+                            ? 'pending'
+                            : issue
+                              ? 'issue'
+                              : 'ok'
+                        }`}
+                      >
+                        {displayedStatus}
+                      </span>
+                      <button
+                        type="button"
+                        className="technical-details-toggle"
+                        aria-expanded={detailsOpen}
+                        aria-controls={detailsPanelId}
+                        onClick={() => toggleTechnicalDetails(row.id)}
+                      >
+                        Technikai részletek
+                      </button>
+                    </td>
+                    {crewSearchEnabled && (
+                      <td data-label="Szolgálati társak" className="crew-cell">
+                        {publicCrew.length > 0 ? (
+                          <details className="crew-details">
+                            <summary>{publicCrew.length} társ</summary>
+                            {STAFF_ROLES.map((role) => {
+                              const matches = publicCrew.filter((match) => match.role === role);
+                              if (matches.length === 0) return null;
+                              return (
+                                <div className="crew-role-group" key={role}>
+                                  <strong>{STAFF_ROLE_LABELS[role]}</strong>
+                                  <ul>
+                                    {matches.map((match) => (
+                                      <li
+                                        key={`${match.role}-${match.employeeName}-${match.overlap.start}-${match.overlap.end}`}
+                                      >
+                                        {match.employeeName} – {crewOverlapLabel(match.overlap)}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              );
+                            })}
+                          </details>
+                        ) : !row.event ? (
+                          '—'
+                        ) : null}
+                      </td>
+                    )}
+                  </tr>
+                  {detailsOpen && (
+                    <tr
+                      className={`review-details-row${issue ? ' review-details-row-issue' : ''}`}
+                    >
+                      <td className="review-details-cell" colSpan={visibleColumnCount}>
+                        <div
+                          id={detailsPanelId}
+                          className="review-details-panel"
+                          role="region"
+                          aria-label={`${formatHungarianDate(row.date)} technikai részletei`}
+                        >
+                          <TechnicalDetails
+                            row={row}
+                            googleState={googleState}
+                            displayedStatus={displayedStatus}
+                            issue={issue}
+                          />
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </tr>
+                </Fragment>
               );
             })}
           </tbody>

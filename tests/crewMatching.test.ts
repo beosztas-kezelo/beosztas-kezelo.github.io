@@ -332,6 +332,9 @@ describe('szolgálati társak idő- és kategóriaalapú párosítása', () => {
       'Azonos Név (7. sor)',
       'Azonos Név (9. sor)',
     ]);
+    expect(crew.matchesByEventId.get('primary')?.map((match) => match.employeeRow)).toEqual([
+      7, 9,
+    ]);
   });
 
   it('párhuzamos egyezéseket mind listáz és figyelmeztet', () => {
